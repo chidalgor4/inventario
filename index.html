@@ -151,7 +151,8 @@ const SEED = {p:[],e:[],s:[]};   // los datos reales NO van en el archivo públi
    CONFIGURACIÓN ONEDRIVE  (ver guía en Ajustes dentro de la app)
    Puedes dejar tu Client ID aquí o pegarlo desde Ajustes.
    ============================================================ */
-const ONEDRIVE_CLIENT_ID = "";                    // <- pega aquí tu Application (client) ID
+const ONEDRIVE_CLIENT_ID = "25f11240-bcf7-4b1b-b5ed-6d738da90d58";   // app "Inventario Gambirasi" (Microsoft Entra)
+const ONEDRIVE_TENANT    = "60f42d6b-9cce-4257-b913-c0965f695426";   // solo cuentas de Acuarios del Golfo
 const ONEDRIVE_FOLDER    = "Inventario Gambirasi"; // nombre de la carpeta de la app (Aplicaciones › …)
 const ONEDRIVE_FILE_JSON = "inventario.json";
 const ONEDRIVE_FILE_XLSX = "Inventario.xlsx";
@@ -529,7 +530,7 @@ function updateCountSummary(){
 function clearCount(){ if(!confirm('¿Borrar todo el conteo físico?')) return; S.conteo={}; save(); render(); }
 
 /* ---------- vista: Ajustes / OneDrive ---------- */
-function od(){ try{ const o = JSON.parse(localStorage.getItem(KEY_OD)||'{}'); if(!o.clientId) o.clientId = ONEDRIVE_CLIENT_ID; if(!o.redirectUri) o.redirectUri = location.origin+location.pathname; return o; }catch(e){ return {clientId:ONEDRIVE_CLIENT_ID, redirectUri:location.origin+location.pathname}; } }
+function od(){ try{ const o = JSON.parse(localStorage.getItem(KEY_OD)||'{}'); o.clientId = ONEDRIVE_CLIENT_ID; o.redirectUri = location.origin+location.pathname; return o; }catch(e){ return {clientId:ONEDRIVE_CLIENT_ID, redirectUri:location.origin+location.pathname}; } }
 function odSet(p){ const o = Object.assign(od(), p); try{ localStorage.setItem(KEY_OD, JSON.stringify(o)); }catch(e){} return o; }
 function vSet(){
   const o = od(), on = !!o.token;
@@ -545,15 +546,7 @@ function vSet(){
         <label style="display:flex;gap:10px;align-items:center;font-size:14px"><input type="checkbox" ${o.auto!==false?'checked':''} onchange="odSet({auto:this.checked});toast(this.checked?'Subida automática activada':'Subida automática desactivada')"> Subir automáticamente cada cambio</label>
         <label style="display:flex;gap:10px;align-items:center;font-size:14px"><input type="checkbox" ${o.remember!==false?'checked':''} onchange="odSet({remember:this.checked});toast(this.checked?'Sesión recordada en este dispositivo':'La sesión se cerrará al cerrar la app')"> Recordarme en este dispositivo</label>
         <button class="btn danger" onclick="odLogout()">Cerrar sesión</button></div>`
-      : `<div class="field"><label>Application (client) ID</label><input id="odcid" value="${esc(o.clientId||'')}" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></div>
-        <div class="field"><label>Redirect URI</label><input id="odruri" value="${esc(o.redirectUri)}"></div>
-        <button class="btn primary full" onclick="odLogin()">Vincular OneDrive</button>
-        <details><summary>¿Cómo obtengo el Client ID? (2 minutos, gratis)</summary><ol>
-          <li>Entra a <code>entra.microsoft.com</code> → Aplicaciones → Registros de aplicaciones → Nuevo registro.</li>
-          <li>Tipos de cuenta: "Cuentas en cualquier directorio y cuentas personales de Microsoft".</li>
-          <li>URI de redirección: plataforma <b>Aplicación de página única (SPA)</b> y pega arriba la Redirect URI.</li>
-          <li>En Permisos de API agrega (Microsoft Graph, delegados): <code>Files.ReadWrite.AppFolder</code>, <code>User.Read</code>, <code>offline_access</code>.</li>
-          <li>Copia el "Id. de aplicación (cliente)" y pégalo aquí.</li></ol></details>`}
+      : `<p style="font-size:14px;color:var(--muted)">Usa tu cuenta de trabajo de Acuarios del Golfo.</p><button class="btn primary full" onclick="odLogin()">Vincular OneDrive</button>`}
     </div>
     <div class="set-block"><h3>Excel (sin configuración)</h3>
       <p>Funciona siempre, también con OneDrive: al importar o exportar, el selector de Android te deja elegir archivos de tu OneDrive.</p>
@@ -639,7 +632,7 @@ function importWorkbook(wb){
 }
 
 /* ---------- OneDrive (Microsoft Graph + OAuth2 PKCE, sin librerías) ---------- */
-const AUTH = 'https://login.microsoftonline.com/common/oauth2/v2.0';
+const AUTH = 'https://login.microsoftonline.com/'+ONEDRIVE_TENANT+'/oauth2/v2.0';
 const SCOPE = 'Files.ReadWrite.AppFolder User.Read offline_access';   // solo la carpeta de la app, nunca el resto de tu OneDrive
 const rnd = n => { const a=new Uint8Array(n); crypto.getRandomValues(a); return btoa(String.fromCharCode(...a)).replace(/[^A-Za-z0-9]/g,'').slice(0,n); };
 const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
@@ -656,9 +649,7 @@ async function odStart(x){
   location.href = u.toString();
 }
 async function odLogin(){   // desde Ajustes
-  const clientId = $('#odcid').value.trim(), redirectUri = $('#odruri').value.trim();
-  if(!clientId) return toast('Pega tu Client ID');
-  odSet({clientId, redirectUri}); odStart({clientId, redirectUri});
+  const o = od(); odStart({clientId:o.clientId, redirectUri:o.redirectUri});
 }
 function odLoginGate(){      // desde la pantalla de inicio de sesión
   const g = $('#gcid'), clientId = ((g && g.value) || od().clientId || '').trim();

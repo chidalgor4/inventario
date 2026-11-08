@@ -140,22 +140,16 @@ code{background:var(--brand-soft);padding:1px 6px;border-radius:6px;font-size:13
 <script>
 if(window.top!==window.self){ document.documentElement.innerHTML=''; throw new Error('frame'); }   // no permitir que otra página la incruste
 /* ============================================================
-   DATOS: se cargan desde OneDrive o importando el archivo privado
-   p: [codigo, descripcion, medida, inicio]
-   e: [nro_documento, fecha, codigo, cantidad]   (Entradas)
-   s: [psc/pre, fecha, codigo, cantidad]         (Salidas)
-   ============================================================ */
-const SEED = {p:[],e:[],s:[]};   // los datos reales NO van en el archivo público: viven en tu OneDrive
-
-/* ============================================================
-   CONFIGURACIÓN ONEDRIVE  (ver guía en Ajustes dentro de la app)
-   Puedes dejar tu Client ID aquí o pegarlo desde Ajustes.
+   CONFIGURACIÓN
+   Los datos NO están en este archivo: viven en la carpeta compartida
+   de OneDrive del administrador. Cada persona entra con su propia cuenta.
    ============================================================ */
 const ONEDRIVE_CLIENT_ID = "25f11240-bcf7-4b1b-b5ed-6d738da90d58";   // app "Inventario Gambirasi" (Microsoft Entra)
-const ONEDRIVE_TENANT    = "60f42d6b-9cce-4257-b913-c0965f695426";   // solo cuentas de Acuarios del Golfo
-const ONEDRIVE_FOLDER    = "Inventario Gambirasi"; // nombre de la carpeta de la app (Aplicaciones › …)
-const ONEDRIVE_FILE_JSON = "inventario.json";
-const ONEDRIVE_FILE_XLSX = "Inventario.xlsx";
+const ONEDRIVE_TENANT    = "60f42d6b-9cce-4257-b913-c0965f695426";   // directorio de Acuarios del Golfo (incluye invitados)
+const SHARED = { drive: "b!VpbFlHqTyUmZyITsDgzY38V_Xw8edndGnrLGEKBonyPFvYc4wbRkQY4EZiqqFnyM", folder: "01QRXXHIXCX6JHBGVGQVBYEJKXBCUQVKYV" };          // carpeta compartida del administrador
+const SHARED_NAME = "Inventario Gambirasi";
+const MASTER_FILE = "inventario.json", REG_DIR = "registros", ONEDRIVE_FILE_XLSX = "Inventario.xlsx";
+const APP_URL = "https://chidalgor4.github.io/inventario/";
 
 /* ---------- utilidades ---------- */
 const $ = s => document.querySelector(s);
@@ -166,16 +160,25 @@ const fmt = n => nf.format(Math.round((+n||0)*100)/100);
 const fdate = iso => { const [y,m,d] = iso.split('-').map(Number); return new Date(y,m-1,d).toLocaleDateString('es-EC',{day:'2-digit',month:'short',year:'numeric'}); };
 const jsa = s => esc(JSON.stringify(String(s ?? '')));   // argumento JS seguro dentro de atributos HTML
 /* ---------- validación: todo dato externo se limpia antes de usarse ---------- */
-const RX_ID=/^[A-Za-z0-9_-]{1,40}$/, RX_DT=/^\d{4}-\d{2}-\d{2}$/, BAD_KEYS=new Set(['__proto__','constructor','prototype']);
+const RX_ID=/^[A-Za-z0-9_.-]{1,100}$/, RX_DT=/^\d{4}-\d{2}-\d{2}$/, RX_FILE=/^[a-z0-9_]{1,140}\.json$/;
+const RX_MAIL=/^[^\s@<>"'`]{1,100}@[^\s@<>"'`]{1,100}$/, BAD_KEYS=new Set(['__proto__','constructor','prototype']);
 const sStr=(v,n=200)=>String(v??'').slice(0,n), sNum=v=>{ v=+v; return Number.isFinite(v)?v:0; };
-function sMap(o,f){ const r={}; if(o&&typeof o==='object') Object.keys(o).forEach(k=>{ if(!BAD_KEYS.has(k)&&o[k]!==''&&o[k]!=null) r[sStr(k,50)]=f(o[k]); }); return r; }
-function sanitize(s){
+const sMail=v=>{ v=sStr(v,200).trim().toLowerCase(); return RX_MAIL.test(v)?v:''; };
+function sMap(o,f){ const r={}; if(o&&typeof o==='object') Object.keys(o).forEach(k=>{ if(!BAD_KEYS.has(k)&&o[k]!==''&&o[k]!=null) r[sStr(k,120)]=f(o[k]); }); return r; }
+function sRecs(a){ return (Array.isArray(a)?a:[]).filter(m=>m&&RX_ID.test(m.id)&&RX_DT.test(m.f)).map(m=>{
+  const o={id:m.id,doc:sStr(m.doc,40),f:m.f,c:sStr(m.c,40),q:sNum(m.q),ts:sNum(m.ts)};
+  const u=sMail(m.u); if(u) o.u=u; const eu=sMail(m.eu); if(eu){ o.eu=eu; o.ets=sNum(m.ets); } return o; }); }
+function sCount(o){ const r={}; if(o&&typeof o==='object') Object.keys(o).forEach(k=>{ if(BAD_KEYS.has(k)) return; const x=o[k];
+  if(x&&typeof x==='object') r[sStr(k,40)]={v:(x.v===null||x.v===''||x.v===undefined)?null:sNum(x.v), ts:sNum(x.ts), u:sMail(x.u)};
+  else if(x!==''&&x!=null) r[sStr(k,40)]={v:sNum(x), ts:0, u:''}; }); return r; }
+function sProds(a){ return (Array.isArray(a)?a:[]).filter(p=>p&&p.c!=null&&p.c!=='').map(p=>{ const o={c:sStr(p.c,40),d:sStr(p.d),u:sStr(p.u,10)||'UND',i:sNum(p.i),min:Math.max(0,sNum(p.min))}; if(p.ts) o.ts=sNum(p.ts); return o; }); }
+function sUsers(a){ return (Array.isArray(a)?a:[]).map(x=>x&&typeof x==='object'?{email:sMail(x.email), nombre:sStr(x.nombre,60), file:sStr(x.file,150), activo:x.activo!==false, ts:sNum(x.ts)}:null).filter(x=>x&&x.email&&RX_FILE.test(x.file)); }
+function sMaster(s){   // inventario principal (lo escribe solo el administrador)
   if(!s||typeof s!=='object'||!Array.isArray(s.productos)) throw new Error('Archivo de datos no válido');
-  const mv=a=>(Array.isArray(a)?a:[]).filter(m=>m&&RX_ID.test(m.id)&&RX_DT.test(m.f)).map(m=>{ const o={id:m.id,doc:sStr(m.doc,40),f:m.f,c:sStr(m.c,40),q:sNum(m.q)}; if(m.ts) o.ts=sNum(m.ts); return o; });
-  const productos=s.productos.filter(p=>p&&p.c!=null&&p.c!=='').map(p=>{ const o={c:sStr(p.c,40),d:sStr(p.d),u:sStr(p.u,10)||'UND',i:sNum(p.i),min:Math.max(0,sNum(p.min))}; if(p.ts) o.ts=sNum(p.ts); return o; });
-  const upd=(typeof s.updated==='string'&&!isNaN(Date.parse(s.updated)))?s.updated:new Date(0).toISOString();
-  return {updated:upd, productos, entradas:mv(s.entradas), salidas:mv(s.salidas), conteo:sMap(s.conteo,sNum), del:sMap(s.del,sNum), v2:s.v2?1:0, dirty:!!s.dirty, rev:sNum(s.rev), force:!!s.force};
+  return {v:3, productos:sProds(s.productos), entradas:sRecs(s.entradas), salidas:sRecs(s.salidas), conteo:sCount(s.conteo),
+    del:sMap(s.del,sNum), usuarios:sUsers(s.usuarios), conteoReset:sNum(s.conteoReset), admin:sMail(s.admin)};
 }
+function sReg(s){ s=(s&&typeof s==='object')?s:{}; return {entradas:sRecs(s.entradas), salidas:sRecs(s.salidas), conteo:sCount(s.conteo)}; }
 const uid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 /* Piscinas (PSC) y precrías (PRE): mismo formato que la hoja Salidas */
 const PSC=['01','02','03','04','05','06','07','08','09','09B','10','11','12','13','14','15','16','17','18','19','20'];
@@ -192,36 +195,60 @@ function docField(){
 function mvDoc(k){ mv.doc = mv.doc===k ? '' : k; $('#mdbox').innerHTML = docField(); }
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toast.t); toast.t=setTimeout(()=>t.classList.remove('show'),2600); }
 
-/* ---------- estado y persistencia ---------- */
-const KEY = 'inv_gambirasi_v1', KEY_OD = 'inv_gambirasi_od';
-function seedState(){
-  return { updated: new Date(0).toISOString(),
-    productos: SEED.p.map(r => ({c:r[0], d:r[1], u:r[2], i:r[3], min:0})),
-    entradas:  SEED.e.map((r,k) => ({id:'se'+k, doc:r[0], f:r[1], c:r[2], q:r[3]})),
-    salidas:   SEED.s.map((r,k) => ({id:'ss'+k, doc:r[0], f:r[1], c:r[2], q:r[3]})),
-    conteo: {}, del: {}, v2: 1 };
+/* ---------- estado y persistencia ----------
+   D.master : inventario principal (carpeta compartida, solo lo modifica el administrador)
+   D.mine   : registros propios de este usuario (su archivo personal en registros/)
+   D.regs   : copia local de los archivos de los demás usuarios
+   S        : vista combinada que usa la interfaz (se recalcula con derive())        */
+const KEY = 'inv_gambirasi_v3', KEY_OD = 'inv_gambirasi_od';
+function emptyMaster(){ return {v:3, productos:[], entradas:[], salidas:[], conteo:{}, del:{}, usuarios:[], conteoReset:0, admin:''}; }
+function emptyD(){ return {master:emptyMaster(), mine:sReg({}), regs:{}, etags:{}, owner:'', dirtyMaster:false, dirtyMine:false, forceMaster:false, rev:0, updated:''}; }
+function loadD(){
+  try{ const r=localStorage.getItem(KEY); if(r){ const j=JSON.parse(r), d=emptyD();
+    d.master=sMaster(j.master); d.mine=sReg(j.mine);
+    Object.keys(j.regs||{}).forEach(k=>{ if(RX_FILE.test(k)) d.regs[k]=sReg(j.regs[k]); });
+    d.etags=sMap(j.etags,v=>sStr(v,300)); d.owner=sMail(j.owner); d.dirtyMaster=!!j.dirtyMaster; d.dirtyMine=!!j.dirtyMine;
+    d.forceMaster=!!j.forceMaster; d.rev=sNum(j.rev); d.updated=sStr(j.updated,40); return d; } }catch(e){}
+  return emptyD();
 }
-function migrateIds(s){   // une los ids de los datos originales con los de otros equipos
-  if(s.v2) return s;
-  const fix = (arr, seedArr, pre) => { const idx = new Map();
-    (arr||[]).forEach((m,i)=>{ const k=[m.doc,m.f,m.c,m.q].join('|'); if(!idx.has(k)) idx.set(k,[]); idx.get(k).push(i); });
-    seedArr.forEach((r,k)=>{ const l = idx.get([r[0],r[1],r[2],r[3]].join('|')); if(l && l.length) arr[l.shift()].id = pre+k; }); };
-  fix(s.entradas, SEED.e, 'se'); fix(s.salidas, SEED.s, 'ss'); s.v2 = 1; return s;
-}
-function loadState(){
-  try{ const r = localStorage.getItem(KEY); if(r){ const s = migrateIds(sanitize(JSON.parse(r))); s.del = s.del||{}; return s; } }catch(e){}
-  return seedState();
-}
-let S = loadState();
+let D = loadD(), S = {productos:[], entradas:[], salidas:[], conteo:{}, conteoInfo:{}};
 let saveTimer, syncing=false, syncErr=false;
-const odAutoOn = () => od().auto !== false;
-function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
-function save(){
-  S.updated = new Date().toISOString(); S.dirty = true; S.rev = (S.rev||0)+1;
-  persist(); paintChip();
-  clearTimeout(saveTimer);
-  if(od().token && odAutoOn()) saveTimer = setTimeout(()=>autoSync(), 2500);
+try{ localStorage.removeItem('inv_gambirasi_v1'); localStorage.removeItem('inv_skip'); }catch(e){}   // datos de la versión anterior (un solo usuario)
+
+const me = () => (od().user||'').toLowerCase();
+const isAdmin = () => od().role==='admin';
+const regKey = email => String(email||'').toLowerCase().replace(/[^a-z0-9]/g,'_')+'.json';
+const fileOwner = f => { const u=D.master.usuarios.find(x=>x.file===f); return u?u.email:''; };
+function userName(email){
+  if(!email || email===D.master.admin) return 'Administrador';
+  const u=D.master.usuarios.find(x=>x.email===email); return u&&u.nombre ? u.nombre : email.split('@')[0];
 }
+const fdt = ts => ts ? new Date(ts).toLocaleString('es-EC',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+
+function derive(){
+  const m=D.master, del=m.del||{}, seen=new Set(), ent=[], sal=[], ci={};
+  const add=(arr,list,owner,pre)=>list.forEach(r=>{ const id=pre?pre+'.'+r.id:r.id; if(del[id]||seen.has(id)) return; seen.add(id);
+    arr.push(Object.assign({},r,{id, u: pre ? owner : (r.u||m.admin||'')})); });          // en archivos personales el autor es SIEMPRE el dueño del archivo
+  const addC=(c,owner)=>Object.keys(c||{}).forEach(k=>{ const x=c[k]; if(x.ts<(m.conteoReset||0)) return;
+    if(!ci[k]||x.ts>=ci[k].ts) ci[k]={v:x.v, ts:x.ts, u: owner||x.u||m.admin||''}; });
+  add(ent,m.entradas); add(sal,m.salidas); addC(m.conteo);
+  if(!isAdmin() && me()){ const pre=regKey(me()).slice(0,-5); add(ent,D.mine.entradas,me(),pre); add(sal,D.mine.salidas,me(),pre); addC(D.mine.conteo,me()); }
+  Object.keys(D.regs).forEach(f=>{ const owner=fileOwner(f); if(!owner) return;      // solo cuentan archivos de usuarios dados de alta
+    const pre=f.slice(0,-5), r=D.regs[f]; add(ent,r.entradas,owner,pre); add(sal,r.salidas,owner,pre); addC(r.conteo,owner); });
+  const conteo={}; Object.keys(ci).forEach(k=>{ if(ci[k].v!==null) conteo[k]=ci[k].v; });
+  S = {productos:m.productos, entradas:ent, salidas:sal, conteo, conteoInfo:ci, usuarios:m.usuarios};
+}
+derive();
+function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(D)); }catch(e){} }
+const target  = () => isAdmin() ? D.master : D.mine;
+const tgtName = () => isAdmin() ? 'master' : 'mine';
+function save(where){
+  if(where==='master') D.dirtyMaster=true; else D.dirtyMine=true;
+  D.rev++; D.updated=new Date().toISOString(); derive(); persist(); paintChip();
+  clearTimeout(saveTimer); if(od().token) saveTimer=setTimeout(()=>autoSync(), 2000);
+}
+const pending = () => D.dirtyMaster || D.dirtyMine;
+function needAdmin(){ if(isAdmin()) return true; toast('Solo el administrador puede hacer esto'); return false; }
 
 /* ---------- cálculos ---------- */
 function calc(){
@@ -277,10 +304,10 @@ function closeSheet(){ $('#scrim').classList.remove('show'); $('#sheet').classLi
 /* ---------- vista: Inicio ---------- */
 function chipInfo(){
   const o = od();
-  if(!o.token) return {cls:'', t: S.dirty?'Sin vincular · datos solo en este equipo':'OneDrive: sin vincular'};
-  if(!navigator.onLine) return {cls:'warn', t: S.dirty?'Sin conexión · cambios pendientes':'Sin conexión'};
+  if(!o.token) return {cls:'', t: pending()?'Sin sesión · cambios pendientes':'Sin sesión'};
+  if(!navigator.onLine) return {cls:'warn', t: pending()?'Sin conexión · cambios pendientes':'Sin conexión'};
   if(syncing) return {cls:'warn', t:'Sincronizando…'};
-  if(syncErr || S.dirty) return {cls:'warn', t:'Cambios pendientes'};
+  if(syncErr || pending()) return {cls:'warn', t:'Cambios pendientes'};
   return {cls:'on', t:'Sincronizado'};
 }
 function syncChip(){ const c=chipInfo(); return `<button id="schip" class="chip-sync" onclick="go('set')"><span class="dot ${c.cls}"></span>${c.t}</button>`; }
@@ -301,7 +328,7 @@ function vHome(){
     <div class="card kpi tap warn" onclick="ui.filt='bajo';go('prod')"><b>${bajo.length}</b><span>Bajo mínimo</span></div>
     <div class="card kpi tap" onclick="go('mov')"><b>${eH+sH}</b><span>Movimientos hoy</span></div>
   </div>
-  ${S.productos.length?'':`<div class="card" style="padding:16px;margin:12px 0"><b>Sin datos en este equipo</b><p style="color:var(--muted);font-size:14px;margin:6px 0 10px">Inicia sesión con OneDrive para traer tu inventario, o importa tu archivo de datos.</p><button class="btn primary full" onclick="importFile()">Importar archivo</button></div>`}
+  ${S.productos.length?'':`<div class="card" style="padding:16px;margin:12px 0"><b>Sin datos en este equipo</b><p style="font-size:14px;color:var(--muted);margin:6px 0 10px">${od().token?'Toca el botón para traer el inventario. Si no aparece nada, pide al administrador que te agregue como usuario.':'Inicia sesión con tu correo para ver el inventario.'}</p><button class="btn primary full" onclick="${od().token?'odSync()':'odLogin()'}">${od().token?'Sincronizar':'Iniciar sesión'}</button></div>`}
   <div class="actions">
     <button class="btn in" onclick="openMove('e')">${IC.down} Entrada</button>
     <button class="btn out" onclick="openMove('s')">${IC.up} Salida</button>
@@ -334,7 +361,7 @@ function vProd(){
   const list = filtProds();
   return `
   <div class="top"><div><h1>Productos</h1><small>${list.length} de ${S.productos.length}</small></div>
-    <button class="btn ghost" style="min-height:42px;padding:8px 14px" onclick="openNewProd()">+ Nuevo</button></div>
+    ${isAdmin()?'<button class="btn ghost" style="min-height:42px;padding:8px 14px" onclick="openNewProd()">+ Nuevo</button>':''}</div>
   <div class="search"><input id="q" type="search" placeholder="Buscar por nombre o código" value="${esc(ui.q)}" oninput="ui.q=this.value;refreshList()">
     <div class="chips">${chip('all','Todos')}${chip('agot','Agotados')}${chip('bajo','Bajo mínimo')}${chip('SC','Sacos')}${chip('LT','Litros')}${chip('KG','Kilos')}</div></div>
   <div class="card list" id="plist">${list.length ? list.map(prodItem).join('') : '<div class="empty">No se encontraron productos.</div>'}</div>`;
@@ -357,13 +384,13 @@ function openProd(c){
       <button class="btn in" onclick="openMove('e',${jsa(c)})">${IC.down} Entrada</button>
       <button class="btn out" onclick="openMove('s',${jsa(c)})">${IC.up} Salida</button></div>
     <div class="field"><label>Stock mínimo (alerta)</label>
-      <input type="number" inputmode="decimal" step="any" min="0" value="${esc(x.p.min||'')}" placeholder="0 = sin alerta" onchange="setMin(${jsa(c)},this.value)"></div>
+      <input type="number" inputmode="decimal" step="any" min="0" value="${esc(x.p.min||'')}" placeholder="0 = sin alerta" ${isAdmin()?'':'disabled'} onchange="setMin(${jsa(c)},this.value)"></div>
     <div class="sec" style="margin-top:14px"><h2>Historial reciente</h2></div>
     <div class="card list">${hist.length ? hist.map(movItem).join('') : '<div class="empty">Sin movimientos.</div>'}</div>
-    <div class="actions"><button class="btn ghost" onclick="openEditProd(${jsa(c)})">Editar</button>
-      <button class="btn danger" onclick="delProd(${jsa(c)})">Eliminar</button></div>`);
+    ${isAdmin()?`<div class="actions"><button class="btn ghost" onclick="openEditProd(${jsa(c)})">Editar</button>
+      <button class="btn danger" onclick="delProd(${jsa(c)})">Eliminar</button></div>`:''}`);
 }
-function setMin(c,v){ const p=S.productos.find(p=>p.c===c); p.min = Math.max(0,+v||0); p.ts = Date.now(); save(); render(); toast('Stock mínimo guardado'); }
+function setMin(c,v){ if(!needAdmin()) return render(); const p=D.master.productos.find(p=>p.c===c); if(!p) return; p.min = Math.max(0,+v||0); p.ts = Date.now(); save('master'); render(); toast('Stock mínimo guardado'); }
 function prodForm(p){
   return `<h2>${p?'Editar producto':'Nuevo producto'}</h2>
     <div class="field"><label>Código</label><input id="fc" value="${esc(p?.c||'')}" ${p?'readonly':''} inputmode="numeric"></div>
@@ -372,28 +399,29 @@ function prodForm(p){
     <div class="field"><label>Inventario inicial</label><input id="fi" type="number" inputmode="decimal" step="any" value="${esc(p?.i??0)}"></div></div>
     <button class="btn primary full" onclick="saveProd(${p?jsa(p.c):'null'})">Guardar</button>`;
 }
-function openNewProd(){ openSheet(prodForm(null)); }
-function openEditProd(c){ openSheet(prodForm(S.productos.find(p=>p.c===c))); }
+function openNewProd(){ if(!needAdmin()) return; openSheet(prodForm(null)); }
+function openEditProd(c){ if(!needAdmin()) return; openSheet(prodForm(D.master.productos.find(p=>p.c===c))); }
 function saveProd(old){
+  if(!needAdmin()) return;
   const c=$('#fc').value.trim(), d=$('#fd').value.trim().toUpperCase(), u=$('#fu').value, i=+$('#fi').value||0;
   if(!c||!d) return toast('Completa código y descripción');
-  if(old){ const p=S.productos.find(p=>p.c===old); Object.assign(p,{d,u,i,ts:Date.now()}); }
-  else { if(S.productos.some(p=>p.c===c)) return toast('Ese código ya existe'); S.productos.push({c,d,u,i,min:0,ts:Date.now()}); }
-  save(); closeSheet(); render(); toast('Producto guardado');
+  if(old){ const p=D.master.productos.find(p=>p.c===old); Object.assign(p,{d,u,i,ts:Date.now()}); }
+  else { if(D.master.productos.some(p=>p.c===c)) return toast('Ese código ya existe'); delete D.master.del['p:'+c]; D.master.productos.push({c,d,u,i,min:0,ts:Date.now()}); }
+  save('master'); closeSheet(); render(); toast('Producto guardado');
 }
 function delProd(c){
+  if(!needAdmin()) return;
   const n = S.entradas.filter(m=>m.c===c).length + S.salidas.filter(m=>m.c===c).length;
   if(n){ return toast('Tiene '+n+' movimientos; no se puede eliminar'); }
   if(!confirm('¿Eliminar este producto?')) return;
-  S.productos = S.productos.filter(p=>p.c!==c); (S.del=S.del||{})['p:'+c]=Date.now(); save(); closeSheet(); render(); toast('Producto eliminado');
+  D.master.productos = D.master.productos.filter(p=>p.c!==c); D.master.del['p:'+c]=Date.now(); save('master'); closeSheet(); render(); toast('Producto eliminado');
 }
-
 /* ---------- vista: Movimientos ---------- */
 function movItem(m){
   const e = m.t==='e';
   return `<button class="item" onclick="openMovDetail(${jsa(m.t)},${jsa(m.id)})">
     <div class="main"><div class="name">${esc(pName(m.c))}</div>
-    <div class="sub">${e?'Entrada · Doc '+esc(m.doc):'Salida · '+esc(docLab(m.doc)||'Sin PSC/PRE')} · ${fdate(m.f)}</div></div>
+    <div class="sub">${e?'Entrada · Doc '+esc(m.doc):'Salida · '+esc(docLab(m.doc)||'Sin PSC/PRE')} · ${fdate(m.f)} · ${esc(userName(m.u))}</div></div>
     <div class="qty"><b class="${e?'in-t':'out-t'}">${e?'+':'-'}${fmt(m.q)}</b><small>${esc(pUnit(m.c))}</small></div></button>`;
 }
 function vMov(){
@@ -424,21 +452,22 @@ function openMovDetail(t,id){
     <div class="card" style="padding:14px;margin:10px 0">
       <div style="font-weight:700">${esc(pName(m.c))}</div>
       <div style="color:var(--muted);font-size:14px;margin-top:4px">${esc(m.c)} · ${fdate(m.f)} · ${t==='e'?'Doc '+esc(m.doc):esc(docLab(m.doc)||'Sin PSC/PRE')}</div>
-      <div style="font-size:26px;font-weight:800;margin-top:8px" class="${t==='e'?'in-t':'out-t'}">${t==='e'?'+':'-'}${fmt(m.q)} ${esc(pUnit(m.c))}</div></div>
-    <div class="actions"><button class="btn ghost" onclick="openMove(${jsa(t)},${jsa(m.c)},${jsa(id)})">Editar</button>
-    <button class="btn danger" onclick="delMov(${jsa(t)},${jsa(id)})">Eliminar</button></div>`);
+      <div style="font-size:26px;font-weight:800;margin-top:8px" class="${t==='e'?'in-t':'out-t'}">${t==='e'?'+':'-'}${fmt(m.q)} ${esc(pUnit(m.c))}</div>
+      <div style="color:var(--muted);font-size:13px;margin-top:10px;border-top:1px solid var(--line);padding-top:8px">Registrado por <b>${esc(userName(m.u))}</b>${m.u?' ('+esc(m.u)+')':''}${m.ts?'<br>'+esc(fdt(m.ts)):''}${m.eu?'<br>Editado por <b>'+esc(userName(m.eu))+'</b> · '+esc(fdt(m.ets)):''}</div></div>
+    ${isAdmin()?`<div class="actions"><button class="btn ghost" onclick="openMove(${jsa(t)},${jsa(m.c)},${jsa(id)})">Editar</button>
+    <button class="btn danger" onclick="delMov(${jsa(t)},${jsa(id)})">Eliminar</button></div>`:''}`);
 }
 function delMov(t,id){
+  if(!needAdmin()) return;
   if(!confirm('¿Eliminar este movimiento? El stock se recalculará.')) return;
-  if(t==='e') S.entradas = S.entradas.filter(x=>x.id!==id); else S.salidas = S.salidas.filter(x=>x.id!==id);
-  (S.del=S.del||{})[id]=Date.now();
-  save(); closeSheet(); render(); toast('Movimiento eliminado');
+  D.master.del[id]=Date.now(); D.master.entradas=D.master.entradas.filter(x=>x.id!==id); D.master.salidas=D.master.salidas.filter(x=>x.id!==id);
+  save('master'); closeSheet(); render(); toast('Movimiento eliminado');
 }
-
 /* ---------- registrar movimiento ---------- */
 let mv = {t:'e', c:'', id:null};
 function openMove(t, c, id){
   mv = {t: t||'e', c: c||'', id: id||null, doc:''};
+  if(id && !isAdmin()) return toast('Solo el administrador puede editar');
   let ex = null; if(id) ex = (mv.t==='e'?S.entradas:S.salidas).find(x=>x.id===id);
   if(ex) mv.doc = String(ex.doc||'');
   openSheet(`
@@ -475,19 +504,25 @@ function mvPreview(){
 }
 function saveMove(){
   const q = +$('#mq').value, f=$('#mf').value, doc = mv.t==='e' ? ($('#md') ? $('#md').value.trim() : '') : (mv.doc||'');
+  if(!od().user) return toast('Inicia sesión para registrar');
   if(!mv.c) return toast('Selecciona un producto');
   if(!(q>0)) return toast('Ingresa una cantidad mayor a 0');
   if(!f) return toast('Selecciona la fecha');
   if(mv.t==='s' && !doc) return toast('Elige la piscina (PSC) o precría (PRE)');
   const x = calc().get(mv.c);
   if(mv.t==='s' && !mv.id && q > x.stock && !confirm('La salida ('+fmt(q)+') supera el stock ('+fmt(x.stock)+'). ¿Registrar de todos modos?')) return;
-  if(mv.id){
-    // si cambió el tipo, se mueve de lista
-    (S.del=S.del||{})[mv.id]=Date.now(); S.entradas = S.entradas.filter(m=>m.id!==mv.id); S.salidas = S.salidas.filter(m=>m.id!==mv.id);
+  const now = Date.now();
+  if(mv.id){   // edición (solo administrador): se anula el original y se guarda la versión corregida, conservando el autor
+    if(!needAdmin()) return;
+    const old = [...S.entradas,...S.salidas].find(m=>m.id===mv.id);
+    D.master.del[mv.id]=now; D.master.entradas=D.master.entradas.filter(m=>m.id!==mv.id); D.master.salidas=D.master.salidas.filter(m=>m.id!==mv.id);
+    const rec = {id:uid(), doc, f, c:mv.c, q, ts:(old&&old.ts)||now, u:(old&&old.u)||me(), eu:me(), ets:now};
+    (mv.t==='e'?D.master.entradas:D.master.salidas).push(rec); save('master');
+  } else {
+    const rec = {id:uid(), doc, f, c:mv.c, q, ts:now, u:me()}, T = target();
+    (mv.t==='e'?T.entradas:T.salidas).push(rec); save(tgtName());
   }
-  const rec = {id: uid(), doc, f, c:mv.c, q, ts:Date.now()};
-  (mv.t==='e'?S.entradas:S.salidas).push(rec);
-  save(); closeSheet(); render(); toast(mv.t==='e'?'Entrada registrada':'Salida registrada');
+  closeSheet(); render(); toast(mv.t==='e'?'Entrada registrada':'Salida registrada');
 }
 
 /* ---------- vista: Conteo físico (cuadre) ---------- */
@@ -504,9 +539,9 @@ function vCount(){
     <div class="chips">${chip('all','Todos')}${chip('pend','Sin contar')}${chip('dif','Con diferencia')}</div></div>
   <div class="card list">${rows.map(x=>{ const f=S.conteo[x.p.c]; return `<div class="count-row" id="cr-${esc(x.p.c)}">
     <div><div class="name" style="font-weight:600;font-size:15px">${esc(x.p.d)}</div>
-    <div class="sub" style="color:var(--muted);font-size:13px">Sistema: <b>${fmt(x.stock)}</b> ${esc(x.p.u)} <span class="pill" id="cp-${esc(x.p.c)}"></span></div></div>
+    <div class="sub" style="color:var(--muted);font-size:13px">Sistema: <b>${fmt(x.stock)}</b> ${esc(x.p.u)} <span class="pill" id="cp-${esc(x.p.c)}"></span>${S.conteoInfo[x.p.c]&&S.conteoInfo[x.p.c].v!==null?'<br>Contó: '+esc(userName(S.conteoInfo[x.p.c].u)):''}</div></div>
     <input type="number" inputmode="decimal" step="any" placeholder="Físico" value="${esc(f===undefined?'':f)}" oninput="setCount(${jsa(x.p.c)},this.value)"></div>`; }).join('') || '<div class="empty">Sin resultados.</div>'}</div>
-  <div class="actions"><button class="btn ghost" onclick="clearCount()">Limpiar conteo</button><button class="btn primary" onclick="exportXLSX()">Exportar Excel</button></div>`;
+  <div class="actions">${isAdmin()?'<button class="btn ghost" onclick="clearCount()">Limpiar conteo</button>':''}<button class="btn primary" onclick="exportXLSX()">Exportar Excel</button></div>`;
 }
 function pillFor(x){
   const d = cDiff(x);
@@ -516,8 +551,8 @@ function pillFor(x){
   return {k:'ok', t:'CORRECTO'};
 }
 function setCount(c,v){
-  if(v==='') delete S.conteo[c]; else S.conteo[c]=+v;
-  save();
+  const T = target(); T.conteo[c] = {v: v===''?null:+v, ts:Date.now(), u:me()};
+  save(tgtName());
   const x = calc().get(c), el = $('#cp-'+CSS.escape(c));
   if(el){ const p=pillFor(x); el.className='pill '+p.k; el.textContent=p.t; }
   updateCountSummary();
@@ -527,38 +562,48 @@ function updateCountSummary(){
   arr.forEach(x=>{ const d=cDiff(x); if(d===null) return; if(d<0) f++; else if(d>0) e++; else ok++; const el=$('#cp-'+CSS.escape(x.p.c)); if(el){const p=pillFor(x); el.className='pill '+p.k; el.textContent=p.t;} });
   const s=$('#csum'); if(s) s.innerHTML = `<div class="card kpi bad"><b>${f}</b><span>Faltantes</span></div><div class="card kpi warn"><b>${e}</b><span>Excedentes</span></div><div class="card kpi"><b>${ok}</b><span>Correctos</span></div>`;
 }
-function clearCount(){ if(!confirm('¿Borrar todo el conteo físico?')) return; S.conteo={}; save(); render(); }
-
+function clearCount(){ if(!needAdmin()) return; if(!confirm('¿Borrar todo el conteo físico de todos los usuarios?')) return; D.master.conteoReset=Date.now(); D.master.conteo={}; save('master'); render(); }
 /* ---------- vista: Ajustes / OneDrive ---------- */
 function od(){ try{ const o = JSON.parse(localStorage.getItem(KEY_OD)||'{}'); o.clientId = ONEDRIVE_CLIENT_ID; o.redirectUri = location.origin+location.pathname; return o; }catch(e){ return {clientId:ONEDRIVE_CLIENT_ID, redirectUri:location.origin+location.pathname}; } }
 function odSet(p){ const o = Object.assign(od(), p); try{ localStorage.setItem(KEY_OD, JSON.stringify(o)); }catch(e){} return o; }
 function vSet(){
-  const o = od(), on = !!o.token;
+  const o = od(), on = !!o.token, adm = isAdmin();
+  const btn = 'min-height:38px;padding:6px 12px;font-size:14px';
   return `
-  <div class="top"><div><h1>Ajustes</h1><small>Sincronización y datos</small></div></div>
+  <div class="top"><div><h1>Ajustes</h1><small>${on?(adm?'Administrador':'Operador'):'Sin sesión'}</small></div>${syncChip()}</div>
   <div class="card">
-    <div class="set-block"><h3>OneDrive</h3>
-      <p>${on?'Cuenta vinculada'+(o.user?': <b>'+esc(o.user)+'</b>':'')+'. Los datos se guardan en tu OneDrive, carpeta <code>Aplicaciones › '+ONEDRIVE_FOLDER+'</code>. La app no puede ver el resto de tus archivos.':'Vincula tu cuenta Microsoft para guardar y recuperar tu inventario desde cualquier dispositivo.'}</p>
-      ${on ? `<div class="stack">
-        <button class="btn primary" onclick="odSync()">Sincronizar ahora</button>
-        <div class="row"><button class="btn ghost" onclick="odPushJSON()">Subir copia</button><button class="btn ghost" onclick="odPullJSON()">Descargar copia</button></div>
-        <button class="btn ghost" onclick="odPushXLSX()">Guardar Excel en OneDrive</button>
-        <label style="display:flex;gap:10px;align-items:center;font-size:14px"><input type="checkbox" ${o.auto!==false?'checked':''} onchange="odSet({auto:this.checked});toast(this.checked?'Subida automática activada':'Subida automática desactivada')"> Subir automáticamente cada cambio</label>
-        <label style="display:flex;gap:10px;align-items:center;font-size:14px"><input type="checkbox" ${o.remember!==false?'checked':''} onchange="odSet({remember:this.checked});toast(this.checked?'Sesión recordada en este dispositivo':'La sesión se cerrará al cerrar la app')"> Recordarme en este dispositivo</label>
-        <button class="btn danger" onclick="odLogout()">Cerrar sesión</button></div>`
-      : `<p style="font-size:14px;color:var(--muted)">Usa tu cuenta de trabajo de Acuarios del Golfo.</p><button class="btn primary full" onclick="odLogin()">Vincular OneDrive</button>`}
-    </div>
-    <div class="set-block"><h3>Excel (sin configuración)</h3>
-      <p>Funciona siempre, también con OneDrive: al importar o exportar, el selector de Android te deja elegir archivos de tu OneDrive.</p>
-      <div class="stack"><button class="btn ghost" onclick="importFile()">Importar desde Excel (.xlsx / .xlsm)</button>
-      <button class="btn ghost" onclick="exportXLSX()">Exportar a Excel (.xlsx)</button>
-      <button class="btn ghost" onclick="exportJSON()">Descargar copia (.json)</button></div></div>
+    <div class="set-block"><h3>Mi cuenta</h3>
+      <p>${on?'<b>'+esc(userName(me()))+'</b><br><span style="color:var(--muted);font-size:13px">'+esc(o.user||'')+'</span>':'No has iniciado sesión.'}</p>
+      <p style="font-size:14px;color:var(--muted)">${adm?'Puedes registrar, editar y eliminar todo, y administrar usuarios.':'Puedes registrar entradas, salidas y conteos. Para corregir algo, pide al administrador.'}</p>
+      <div class="stack">
+        ${on?'<button class="btn primary" onclick="odSync()">Sincronizar ahora</button>':'<button class="btn primary" onclick="odLogin()">Iniciar sesión</button>'}
+        ${on?`<label style="display:flex;gap:10px;align-items:center;font-size:14px"><input type="checkbox" ${o.remember!==false?'checked':''} onchange="odSet({remember:this.checked});toast(this.checked?'Sesión recordada en este dispositivo':'La sesión se cerrará al cerrar la app')"> Recordarme en este dispositivo</label>
+        <button class="btn danger" onclick="odLogout()">Cerrar sesión</button>`:''}
+      </div>
+      ${o.last?'<p style="font-size:13px;color:var(--muted);margin-top:8px">Última sincronización: '+esc(fdt(o.last))+'</p>':''}</div>
+    ${adm?usersBlock(btn):''}
+    <div class="set-block"><h3>Excel</h3>
+      <div class="stack">
+        <button class="btn ghost" onclick="exportXLSX()">Exportar a Excel (.xlsx)</button>
+        ${adm?'<button class="btn ghost" onclick="odPushXLSX()">Guardar Excel en OneDrive</button><button class="btn ghost" onclick="importFile()">Importar desde Excel (.xlsx / .xlsm)</button>':''}
+      </div></div>
     <div class="set-block"><h3>Datos</h3>
-      <p>${S.productos.length} productos · ${S.entradas.length} entradas · ${S.salidas.length} salidas.<br>Última modificación: ${S.updated.startsWith('1970')?'datos importados':new Date(S.updated).toLocaleString('es-EC')}</p></div>
+      <p>${S.productos.length} productos · ${S.entradas.length} entradas · ${S.salidas.length} salidas${pending()?'<br><b>Hay cambios de este equipo pendientes de subir.</b>':''}</p></div>
   </div>`;
 }
-function resetData(){ if(!confirm('Se borrarán los cambios hechos en la app y volverán los datos originales. ¿Continuar?')) return; S = seedState(); S.force = true; save(); render(); toast('Datos restaurados'); }
-
+function usersBlock(btn){
+  const us = D.master.usuarios.slice().sort((a,b)=>(b.activo-a.activo)||a.nombre.localeCompare(b.nombre,'es'));
+  const last = {}; [...S.entradas,...S.salidas].forEach(m=>{ if(m.u&&(!last[m.u]||m.ts>last[m.u])) last[m.u]=m.ts; });
+  return `<div class="set-block"><h3>Usuarios (${us.filter(u=>u.activo).length} con acceso)</h3>
+    <p style="font-size:14px">Cada persona entra con <b>su propio correo</b> y todo lo que registra queda con su nombre. Los usuarios solo pueden registrar; editar y eliminar es exclusivo tuyo.</p>
+    <div class="card list" style="margin:10px 0">${us.map(u=>`<div class="item" style="cursor:default">
+      <div class="main"><div class="name">${esc(u.nombre||u.email)}</div><div class="sub">${esc(u.email)}<br>${u.activo?'Con acceso':'Sin acceso'}${last[u.email]?' · último registro '+esc(fdt(last[u.email])):''}</div></div>
+      ${u.activo?`<button class="btn danger" style="${btn}" onclick="removeUser(${jsa(u.email)})">Quitar</button>`:`<button class="btn ghost" style="${btn}" onclick="reAddUser(${jsa(u.email)})">Reactivar</button>`}</div>`).join('') || '<div class="empty">Todavía no has agregado usuarios.</div>'}</div>
+    <div class="field"><label>Nombre y apellido</label><input id="un" maxlength="60" placeholder="Ej. Juan Pérez" autocomplete="off"></div>
+    <div class="field"><label>Correo de Microsoft de la persona</label><input id="ue" type="email" maxlength="120" placeholder="nombre@acuariosdelgolfo.com o @outlook.com" autocomplete="off"></div>
+    <button id="ubtn" class="btn primary full" onclick="addUser()">Agregar usuario</button>
+    <p style="font-size:13px;color:var(--muted);margin-top:8px">Le llegará un correo con el link de la app. Si es una cuenta personal (Outlook/Hotmail) y Microsoft rechaza la invitación, primero hay que invitarla como "usuario externo" en Microsoft Entra (ver manual).</p></div>`;
+}
 /* ---------- Excel: exportar / importar (SheetJS) ---------- */
 function loadXLSX(){
   return new Promise((res,rej)=>{
@@ -569,15 +614,15 @@ function loadXLSX(){
 }
 function buildWorkbook(){
   const m = calc();
-  const stock = [['INVENTARIO DE PRODUCTO'],[],['N','Codigo Producto','Descripción','Medida','Inicio','Entradas','Salidas','Stock Actual','Conteo Físico','Diferencia','Observación']];
+  const stock = [['INVENTARIO DE PRODUCTO'],[],['N','Codigo Producto','Descripción','Medida','Inicio','Entradas','Salidas','Stock Actual','Conteo Físico','Diferencia','Observación','Contado por']];
   S.productos.forEach((p,i)=>{ const x=m.get(p.c), f=S.conteo[p.c], d=cDiff(x);
-    stock.push([i+1,p.c,p.d,p.u,p.i,x.ent,x.sal,x.stock, f===undefined?'':f, d===null?'':d, d===null?'':(d<0?'FALTANTE':d>0?'EXCEDENTE':'CORRECTO')]); });
-  const ent = [['ENTRADA DE PRODUCTOS'],[],['Nro. Documento','Fecha','Codigo Producto','Descripción','Medida','Cantidad']];
-  S.entradas.slice().sort((a,b)=>a.f.localeCompare(b.f)).forEach(e=>ent.push([e.doc,e.f,e.c,pName(e.c),pUnit(e.c),e.q]));
-  const sal = [['SALIDA DE PRODUCTOS'],[],['PSC/PRE','Fecha','Codigo Producto','Descripción','Medida','Cantidad']];
-  S.salidas.slice().sort((a,b)=>a.f.localeCompare(b.f)).forEach(e=>sal.push([e.doc,e.f,e.c,pName(e.c),pUnit(e.c),e.q]));
+    stock.push([i+1,p.c,p.d,p.u,p.i,x.ent,x.sal,x.stock, f===undefined?'':f, d===null?'':d, d===null?'':(d<0?'FALTANTE':d>0?'EXCEDENTE':'CORRECTO'), d===null?'':userName((S.conteoInfo[p.c]||{}).u)]); });
+  const ent = [['ENTRADA DE PRODUCTOS'],[],['Nro. Documento','Fecha','Codigo Producto','Descripción','Medida','Cantidad','Registrado por','Correo','Fecha/hora registro']];
+  S.entradas.slice().sort((a,b)=>a.f.localeCompare(b.f)).forEach(e=>ent.push([e.doc,e.f,e.c,pName(e.c),pUnit(e.c),e.q,userName(e.u),e.u||'',fdt(e.ts)]));
+  const sal = [['SALIDA DE PRODUCTOS'],[],['PSC/PRE','Fecha','Codigo Producto','Descripción','Medida','Cantidad','Registrado por','Correo','Fecha/hora registro']];
+  S.salidas.slice().sort((a,b)=>a.f.localeCompare(b.f)).forEach(e=>sal.push([e.doc,e.f,e.c,pName(e.c),pUnit(e.c),e.q,userName(e.u),e.u||'',fdt(e.ts)]));
   const wb = XLSX.utils.book_new();
-  [['Stock',stock,[6,16,52,9,10,10,10,12,13,12,14]],['Entradas',ent,[16,12,16,52,9,10]],['Salidas',sal,[12,12,16,52,9,10]]].forEach(([n,rows,w])=>{
+  [['Stock',stock,[6,16,52,9,10,10,10,12,13,12,14,22]],['Entradas',ent,[16,12,16,52,9,10,22,30,20]],['Salidas',sal,[12,12,16,52,9,10,22,30,20]]].forEach(([n,rows,w])=>{
     const ws = XLSX.utils.aoa_to_sheet(rows); ws['!cols']=w.map(x=>({wch:x})); XLSX.utils.book_append_sheet(wb,ws,n); });
   return wb;
 }
@@ -585,14 +630,16 @@ async function exportXLSX(){
   try{ await loadXLSX(); const wb=buildWorkbook(); XLSX.writeFile(wb,'Inventario_'+todayISO()+'.xlsx'); toast('Excel generado'); }catch(e){ toast(e.message); }
 }
 function download(name, blob){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500); }
-function exportJSON(){ download('inventario_'+todayISO()+'.json', new Blob([JSON.stringify(S)],{type:'application/json'})); toast('Copia descargada'); }
-function importFile(){ $('#filex').value=''; $('#filex').click(); }
+
+function importFile(){ if(!needAdmin()) return; $('#filex').value=''; $('#filex').click(); }
 $('#filex').addEventListener('change', async ev=>{
   const f = ev.target.files[0]; if(!f) return;
   try{
     if(f.name.toLowerCase().endsWith('.json')){
-      const j = sanitize(JSON.parse(await f.text())); j.force = false;
-      if(!confirm('Esto reemplazará los datos actuales. ¿Continuar?')) return; S=j; save(); render(); return toast('Copia restaurada');
+      if(!isAdmin()) return toast('Solo el administrador puede importar');
+      const j = sMaster(JSON.parse(await f.text()));
+      if(!confirm('Esto reemplazará el inventario principal. ¿Continuar?')) return;
+      D.master = Object.assign(j, {usuarios:D.master.usuarios, admin:D.master.admin||me()}); D.forceMaster=true; save('master'); render(); return toast('Copia restaurada');
     }
     await loadXLSX();
     const wb = XLSX.read(await f.arrayBuffer(), {type:'array'});
@@ -624,16 +671,16 @@ function importWorkbook(wb){
   const mov = name => { const s=sheetRows(wb,name); const ic=s.head.findIndex(h=>h.startsWith('codigo')), idsc=s.head.findIndex(h=>h.startsWith('descrip')), iq=s.head.findIndex(h=>h.startsWith('cantidad')), ifch=s.head.findIndex(h=>h.startsWith('fecha'));
     const out=[]; s.data.forEach(r=>{ const f=xDate(r[ifch]), q=+r[iq]; if(!f||!(q>0)) return;
       let c = r[ic]!=null && r[ic]!=='' ? (typeof r[ic]==='number'? String(r[ic]).padStart(5,'0') : clean(r[ic])) : byDesc.get(clean(r[idsc]));
-      if(!c || !seen.has(c)) return; out.push({id:uid(), doc:clean(r[0]), f, c, q}); }); return out; };
+      if(!c || !seen.has(c)) return; out.push({id:uid(), doc:clean(r[0]), f, c, q, ts:Date.now(), u:me()}); }); return out; };
   const entradas = mov('Entradas'), salidas = mov('Salidas');
   if(!confirm('Se importarán '+productos.length+' productos, '+entradas.length+' entradas y '+salidas.length+' salidas, reemplazando los datos actuales. ¿Continuar?')) return {p:0,e:0,s:0};
-  S = {updated:new Date().toISOString(), productos, entradas, salidas, conteo:S.conteo||{}, v2:1, del:{}, force:true}; save();
+  D.master = Object.assign(emptyMaster(), {productos, entradas, salidas, usuarios:D.master.usuarios, admin:D.master.admin||me()}); D.forceMaster=true; save('master');
   return {p:productos.length, e:entradas.length, s:salidas.length};
 }
 
 /* ---------- OneDrive (Microsoft Graph + OAuth2 PKCE, sin librerías) ---------- */
 const AUTH = 'https://login.microsoftonline.com/'+ONEDRIVE_TENANT+'/oauth2/v2.0';
-const SCOPE = 'Files.ReadWrite.AppFolder User.Read offline_access';   // solo la carpeta de la app, nunca el resto de tu OneDrive
+const SCOPE = 'Files.ReadWrite.All User.Read offline_access';   // necesario para trabajar sobre la carpeta compartida del administrador
 const rnd = n => { const a=new Uint8Array(n); crypto.getRandomValues(a); return btoa(String.fromCharCode(...a)).replace(/[^A-Za-z0-9]/g,'').slice(0,n); };
 const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 const odRemember = () => od().remember !== false;
@@ -648,9 +695,7 @@ async function odStart(x){
   const u = new URL(AUTH+'/authorize'); Object.entries(prm).forEach(([k,v])=>u.searchParams.set(k,v));
   location.href = u.toString();
 }
-async function odLogin(){   // desde Ajustes
-  const o = od(); odStart({clientId:o.clientId, redirectUri:o.redirectUri});
-}
+async function odLogin(){ const o = od(); odStart({clientId:o.clientId, redirectUri:o.redirectUri}); }
 function odLoginGate(){      // desde la pantalla de inicio de sesión
   const g = $('#gcid'), clientId = ((g && g.value) || od().clientId || '').trim();
   odSet({clientId, remember: $('#grem').checked});
@@ -674,8 +719,9 @@ async function odHandleRedirect(){
     const t = await odToken({client_id:o.clientId, grant_type:'authorization_code', code:q.get('code'), redirect_uri:o.redirectUri, code_verifier:p.verifier, scope:SCOPE});
     odSet({token:t.access_token, refresh:t.refresh_token, exp:Date.now()+t.expires_in*1000-60000});
     try{ sessionStorage.setItem('inv_session','1'); sessionStorage.removeItem('inv_silent'); }catch(e){}
-    try{ localStorage.removeItem('inv_skip'); }catch(e){}
-    try{ const me = await graph('/me'); odSet({user: me.userPrincipalName||me.mail||me.displayName}); }catch(e){}
+    try{ const u = await graph('/me?$select=mail,userPrincipalName,displayName'); const email = sMail(u.mail)||sMail(u.userPrincipalName);
+      if(D.owner && D.owner!==email){ D.mine=sReg({}); D.dirtyMine=false; D.regs={}; D.etags={}; }   // otra persona en este equipo: no se mezclan registros
+      D.owner = email; odSet({user: email, name: sStr(u.displayName,80), role:''}); await detectRole(); derive(); persist(); }catch(e){}
     if(!p.silent){ view='home'; toast('Sesión iniciada'); }
   }catch(e){ toast(e.message); }
 }
@@ -699,14 +745,14 @@ async function odAutoLogin(){   // "recordarme": renueva en silencio, sin pedir 
 function showGate(){
   if($('#gate')) return; const o = od(), g = document.createElement('div'); g.id='gate';
   g.innerHTML = `<div class="gbox"><h1>Inventario Gambirasi</h1>
-    <p>${o.user?'Tu sesión venció. Inicia sesión para seguir sincronizando.':'Inicia sesión con tu cuenta de Microsoft para sincronizar el inventario con OneDrive.'}</p>
+    <p>${o.user?'Tu sesión venció. Inicia sesión para seguir sincronizando.':'Inicia sesión con tu cuenta de Microsoft para usar el inventario.'}</p>
     ${o.clientId?'':'<div class="field" style="text-align:left"><label>Application (client) ID</label><input id="gcid" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></div>'}
     <button class="btn primary full" onclick="odLoginGate()">Iniciar sesión con Microsoft</button>
     <label class="remember"><input type="checkbox" id="grem" checked> Recordarme en este dispositivo</label>
-    <button class="link" onclick="skipGate()">Usar sin vincular por ahora</button></div>`;
+    <p style="font-size:13px;color:var(--muted);margin-top:14px">Entra con <b>tu propio correo</b>. Todo lo que registres quedará a tu nombre.</p></div>`;
   document.body.appendChild(g);
 }
-function skipGate(){ try{ localStorage.setItem('inv_skip','1'); }catch(e){} const g=$('#gate'); if(g) g.remove(); }
+
 async function graph(path, opt={}){
   const tk = opt.noauth ? null : await accessToken();
   const r = await fetch('https://graph.microsoft.com/v1.0'+path, {method:opt.method||'GET', headers:Object.assign({Authorization:'Bearer '+tk}, opt.headers||{}), body:opt.body});
@@ -714,69 +760,155 @@ async function graph(path, opt={}){
   if(!r.ok){ let m='Error '+r.status; try{ m=(await r.json()).error.message; }catch(e){} const er=new Error(m); er.status=r.status; throw er; }
   return opt.raw ? r : (r.status===204 ? {} : r.json());
 }
-const odPath = f => '/me/drive/special/approot:/'+encodeURIComponent(f);
-async function odPushJSON(silent){
-  try{ await graph(odPath(ONEDRIVE_FILE_JSON)+':/content', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(S)}); odSet({last:Date.now()}); if(!silent) toast('Copia subida a OneDrive'); }
-  catch(e){ toast('OneDrive: '+e.message); }
+const enc = p => p.split('/').map(encodeURIComponent).join('/');
+const ip = p => '/drives/'+SHARED.drive+'/items/'+SHARED.folder+':/'+enc(p);          // ruta dentro de la carpeta compartida
+const itemUrl = id => '/drives/'+SHARED.drive+'/items/'+id;
+const J = {'Content-Type':'application/json'};
+async function detectRole(){   // administrador = dueño de la carpeta compartida
+  let role='operador'; try{ const d=await graph('/me/drive?$select=id'); if(d&&d.id===SHARED.drive) role='admin'; }catch(e){}
+  odSet({role}); if(role==='admin' && !D.master.admin) D.master.admin=me(); return role;
 }
-async function odPullJSON(skipConfirm){
-  try{
-    const meta = await graph(odPath(ONEDRIVE_FILE_JSON)); if(!meta) return toast('Aún no hay copia en OneDrive');
-    if(!skipConfirm && !confirm('Se reemplazarán los datos de este dispositivo por los de OneDrive. ¿Continuar?')) return;
-    const r = await graph(odPath(ONEDRIVE_FILE_JSON)+':/content', {raw:true}); const j = await r.json();
-    S=sanitize(j); try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){} render(); toast('Datos descargados de OneDrive');
-  }catch(e){ toast('OneDrive: '+e.message); }
+function byId(a,b,del){ const m=new Map(); [...(b||[]),...(a||[])].forEach(x=>{ if(del&&del[x.id]) return; const o=m.get(x.id); if(!o||(x.ets||x.ts||0)>=(o.ets||o.ts||0)) m.set(x.id,x); }); return [...m.values()]; }
+function mergeCount(a,b){ const r=Object.assign({},b||{}); Object.keys(a||{}).forEach(k=>{ if(!r[k]||a[k].ts>=r[k].ts) r[k]=a[k]; }); return r; }
+function mergeMaster(L,R){
+  const del=Object.assign({},R.del,L.del);
+  const pm=new Map(); [...R.productos,...L.productos].forEach(p=>{ if(del['p:'+p.c]) return; const o=pm.get(p.c); if(!o||(p.ts||0)>=(o.ts||0)) pm.set(p.c,p); });
+  const um=new Map(); [...R.usuarios,...L.usuarios].forEach(u=>{ const o=um.get(u.email); if(!o||u.ts>=o.ts) um.set(u.email,u); });
+  const reset=Math.max(L.conteoReset||0,R.conteoReset||0), cnt=mergeCount(L.conteo,R.conteo);
+  Object.keys(cnt).forEach(k=>{ if(cnt[k].ts<reset) delete cnt[k]; });
+  return {v:3, productos:[...pm.values()], entradas:byId(L.entradas,R.entradas,del), salidas:byId(L.salidas,R.salidas,del), conteo:cnt, del,
+    usuarios:[...um.values()], conteoReset:reset, admin:L.admin||R.admin};
 }
-function mergeState(R){
-  migrateIds(R); S.del = S.del||{};
-  const del = Object.assign({}, R.del||{}, S.del);
-  const mm = (a,b) => { const m=new Map(); [...(b||[]),...(a||[])].forEach(x=>{ if(del[x.id]) return; const o=m.get(x.id); if(!o||(x.ts||0)>=(o.ts||0)) m.set(x.id,x); }); return [...m.values()]; };
-  const pm = new Map(); [...(R.productos||[]),...S.productos].forEach(p=>{ if(del['p:'+p.c]) return; const o=pm.get(p.c); if(!o||(p.ts||0)>=(o.ts||0)) pm.set(p.c,p); });
-  S.entradas = mm(S.entradas, R.entradas); S.salidas = mm(S.salidas, R.salidas); S.productos = [...pm.values()];
-  S.conteo = Object.assign({}, R.conteo||{}, S.conteo||{}); S.del = del;
+async function readJSON(path){ const r = await graph(path, {raw:true}); return r ? r.json() : null; }
+async function syncMaster(admin){
+  for(let i=0;i<3;i++){
+    const meta = await graph(ip(MASTER_FILE));
+    const R = meta ? sMaster(await readJSON(ip(MASTER_FILE)+':/content')) : null;
+    if(!admin){ if(R) D.master = R; return; }                    // los usuarios solo leen el inventario principal
+    let M = !R ? D.master : D.forceMaster ? Object.assign({}, D.master, {usuarios: mergeMaster(D.master,R).usuarios}) : mergeMaster(D.master,R);
+    if(!M.admin) M.admin = me();
+    D.master = M;
+    if(R && !D.dirtyMaster && !D.forceMaster) return;
+    const rev = D.rev, hdr = Object.assign({}, J); if(meta && meta.eTag) hdr['If-Match'] = meta.eTag;
+    try{ await graph(meta ? itemUrl(meta.id)+'/content' : ip(MASTER_FILE)+':/content', {method:'PUT', headers:hdr, body:JSON.stringify(M)});
+      if(D.rev===rev) D.dirtyMaster=false; D.forceMaster=false; return;
+    }catch(e){ if(e.status===412 && i<2) continue; throw e; }
+  }
+}
+async function syncMine(){
+  const f = regKey(me());
+  for(let i=0;i<3;i++){
+    const meta = await graph(ip(REG_DIR+'/'+f));
+    if(!meta) throw new Error('Tu usuario aún no está habilitado. Pide al administrador que te agregue.');
+    const R = sReg(await readJSON(itemUrl(meta.id)+'/content'));
+    const M = {entradas:byId(D.mine.entradas,R.entradas), salidas:byId(D.mine.salidas,R.salidas), conteo:mergeCount(D.mine.conteo,R.conteo)};
+    D.mine = M;
+    if(!D.dirtyMine){ D.regs[f]=M; D.etags[f]=meta.eTag; return; }
+    const rev = D.rev;
+    try{ const r = await graph(itemUrl(meta.id)+'/content', {method:'PUT', headers:Object.assign({'If-Match':meta.eTag}, J), body:JSON.stringify(M)});
+      if(D.rev===rev) D.dirtyMine=false; D.regs[f]=M; D.etags[f]=r&&r.eTag; return;
+    }catch(e){ if(e.status===412 && i<2) continue; throw e; }
+  }
+}
+async function syncRegs(admin){
+  const list = await graph(ip(REG_DIR)+':/children?$select=name,eTag,id&$top=999');
+  const mine = admin ? '' : regKey(me());
+  for(const it of (list&&list.value)||[]){
+    if(!RX_FILE.test(it.name) || it.name===mine || !fileOwner(it.name)) continue;
+    if(D.etags[it.name]===it.eTag && D.regs[it.name]) continue;
+    D.regs[it.name] = sReg(await readJSON(itemUrl(it.id)+'/content')); D.etags[it.name] = it.eTag;
+  }
 }
 async function autoSync(manual){
-  if(!od().token){ if(manual) toast('Inicia sesión con OneDrive'); return; }
+  if(!od().token){ if(manual) toast('Inicia sesión'); return; }
   if(syncing) return;
   if(!navigator.onLine){ paintChip(); if(manual) toast('Sin conexión: se sincronizará al volver internet'); return; }
   syncing = true; syncErr = false; paintChip();
   try{
-    for(let i=0;i<3;i++){
-      const meta = await graph(odPath(ONEDRIVE_FILE_JSON));
-      if(meta && !S.force){ const r = await graph(odPath(ONEDRIVE_FILE_JSON)+':/content', {raw:true}); let R=null; try{ R = sanitize(await r.json()); }catch(x){} if(R) mergeState(R); }
-      const rev = S.rev||0, hdr = {'Content-Type':'application/json'}; if(meta && meta.eTag) hdr['If-Match'] = meta.eTag;
-      try{
-        await graph(odPath(ONEDRIVE_FILE_JSON)+':/content', {method:'PUT', headers:hdr, body:JSON.stringify(Object.assign({},S,{dirty:false,force:false}))});
-        if((S.rev||0)===rev) S.dirty = false; S.force = false; break;
-      }catch(e){ if(e.status===412 && i<2) continue; throw e; }
-    }
-    persist(); odSet({last:Date.now()});
+    if(!od().role) await detectRole();
+    const admin = isAdmin();
+    await syncMaster(admin);
+    if(!admin) await syncMine();
+    await syncRegs(admin);
+    derive(); persist(); odSet({last:Date.now()});
     const typing = document.activeElement && ['INPUT','SELECT'].includes(document.activeElement.tagName);
     if(!$('#sheet').classList.contains('show') && !typing) render();
-    if(manual) toast('Sincronizado con OneDrive');
+    if(manual) toast('Sincronizado');
   }catch(e){
-    syncErr = true; if(manual) toast('OneDrive: '+e.message);
-    if(/venció/.test(e.message) && !$('#sheet').classList.contains('show')){ try{ await odAutoLogin(); }catch(x){} if(!od().token && !localStorage.getItem('inv_skip')) showGate(); }
+    syncErr = true; if(manual || /habilitado/.test(e.message)) toast(e.message);
+    if(/venció/.test(e.message) && !$('#sheet').classList.contains('show')){ try{ await odAutoLogin(); }catch(x){} if(!od().token) showGate(); }
   }finally{ syncing = false; paintChip(); }
+}
+/* ---------- administración de usuarios (solo administrador) ---------- */
+async function ensureRegDir(){
+  const d = await graph(ip(REG_DIR)); if(d) return d;
+  return graph(itemUrl(SHARED.folder)+'/children', {method:'POST', headers:J, body:JSON.stringify({name:REG_DIR, folder:{}, '@microsoft.graph.conflictBehavior':'fail'})});
+}
+async function addUser(){
+  if(!needAdmin()) return;
+  const nombre = sStr($('#un').value.trim(),60), email = sMail($('#ue').value);
+  if(!nombre || !email) return toast('Escribe el nombre y un correo válido');
+  if(email===me()) return toast('Ese es tu propio correo de administrador');
+  if(!navigator.onLine) return toast('Necesitas internet para agregar usuarios');
+  const b = $('#ubtn'); b.disabled = true; b.textContent = 'Agregando…';
+  try{
+    await ensureRegDir();
+    const file = regKey(email);
+    let f = await graph(ip(REG_DIR+'/'+file));
+    if(!f) f = await graph(ip(REG_DIR+'/'+file)+':/content', {method:'PUT', headers:J, body:JSON.stringify({entradas:[],salidas:[],conteo:{}})});
+    const msg = 'Hola '+nombre+', te doy acceso a la app de inventario de bodega GAMBIRASI. Ábrela en '+APP_URL+' e inicia sesión con este mismo correo ('+email+').';
+    await graph(itemUrl(SHARED.folder)+'/invite', {method:'POST', headers:J, body:JSON.stringify({recipients:[{email}], requireSignIn:true, sendInvitation:true, roles:['read'], message:msg})});
+    await graph(itemUrl(f.id)+'/invite', {method:'POST', headers:J, body:JSON.stringify({recipients:[{email}], requireSignIn:true, sendInvitation:false, roles:['write']})});
+    const now = Date.now(), ex = D.master.usuarios.find(u=>u.email===email);
+    if(ex) Object.assign(ex, {nombre, file, activo:true, ts:now}); else D.master.usuarios.push({email, nombre, file, activo:true, ts:now});
+    save('master'); await autoSync(); render(); toast('Usuario agregado. Le llegará un correo con el link.');
+  }catch(e){ toast('No se pudo agregar: '+e.message); }
+  finally{ const b2=$('#ubtn'); if(b2){ b2.disabled=false; b2.textContent='Agregar usuario'; } }
+}
+function reAddUser(email){ const u = D.master.usuarios.find(x=>x.email===email); if(!u) return; $('#un').value=u.nombre; $('#ue').value=u.email; addUser(); }
+function permEmails(p){ const out=[], push=x=>{ if(x&&x.user&&x.user.email) out.push(String(x.user.email).toLowerCase()); };
+  push(p.grantedToV2); push(p.grantedTo); (p.grantedToIdentitiesV2||[]).forEach(push); (p.grantedToIdentities||[]).forEach(push);
+  if(p.invitation&&p.invitation.email) out.push(String(p.invitation.email).toLowerCase()); return out; }
+async function removeUser(email){
+  if(!needAdmin()) return;
+  if(!confirm('¿Quitar el acceso a '+userName(email)+'? Sus registros anteriores se conservan.')) return;
+  if(!navigator.onLine) return toast('Necesitas internet para quitar usuarios');
+  try{
+    const u = D.master.usuarios.find(x=>x.email===email); if(!u) return;
+    const ids = [SHARED.folder], f = await graph(ip(REG_DIR+'/'+u.file)); if(f) ids.push(f.id);
+    for(const id of ids){
+      const ps = await graph(itemUrl(id)+'/permissions');
+      for(const p of (ps&&ps.value)||[]){ if(p.inheritedFrom || (p.roles||[]).includes('owner')) continue;
+        if(permEmails(p).includes(email)) await graph(itemUrl(id)+'/permissions/'+p.id, {method:'DELETE'}); }
+    }
+    u.activo=false; u.ts=Date.now(); save('master'); await autoSync(); render(); toast('Acceso retirado');
+  }catch(e){ toast('Error: '+e.message); }
 }
 async function odSync(){ await autoSync(true); }
 async function odPushXLSX(){
+  if(!needAdmin()) return;
   try{ await loadXLSX(); const buf = XLSX.write(buildWorkbook(), {type:'array', bookType:'xlsx'});
-    await graph(odPath(ONEDRIVE_FILE_XLSX)+':/content', {method:'PUT', headers:{'Content-Type':'application/octet-stream'}, body:new Blob([buf])}); toast('Excel guardado en OneDrive'); }
+    await graph(ip(ONEDRIVE_FILE_XLSX)+':/content', {method:'PUT', headers:{'Content-Type':'application/octet-stream'}, body:new Blob([buf])}); toast('Excel guardado en OneDrive'); }
   catch(e){ toast('OneDrive: '+e.message); }
 }
-function odLogout(){ if(!confirm('¿Cerrar la sesión de OneDrive en este dispositivo?')) return; odSet({token:'',refresh:'',exp:0,user:''}); try{ localStorage.removeItem('inv_skip'); }catch(e){} render(); showGate(); toast('Sesión cerrada'); }
-
+async function odLogout(){
+  if(pending()){
+    if(!navigator.onLine) return toast('Tienes registros sin subir. Conéctate a internet antes de cerrar sesión.');
+    await autoSync(true); if(pending()) return toast('No se pudieron subir tus registros. Intenta de nuevo antes de cerrar sesión.');
+  }
+  if(!confirm('¿Cerrar tu sesión en este dispositivo?')) return;
+  odSet({token:'',refresh:'',exp:0,user:'',role:'',name:''}); render(); showGate(); toast('Sesión cerrada');
+}
 /* ---------- arranque ---------- */
 (async function init(){
   try{ await odHandleRedirect(); }catch(e){}
   // sin "recordarme": la sesión dura solo mientras la app esté abierta
   const o = od();
-  if(o.token && o.remember===false && !sessionStorage.getItem('inv_session')) odSet({token:'',refresh:'',exp:0,user:''});
+  if(o.token && o.remember===false && !sessionStorage.getItem('inv_session') && !pending()) odSet({token:'',refresh:'',exp:0,user:'',role:''});
   else if(o.token){ try{ sessionStorage.setItem('inv_session','1'); }catch(e){} }
-  render();
+  derive(); render();
   try{ await odAutoLogin(); }catch(e){}
-  if(!od().token && !localStorage.getItem('inv_skip')) showGate();
+  if(!od().token) showGate();
   window.addEventListener('online', ()=>{ toast('Conexión recuperada: sincronizando…'); paintChip(); autoSync(); });
   window.addEventListener('offline', ()=>{ toast('Sin conexión: tus registros se guardan en este dispositivo'); paintChip(); });
   document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) autoSync(); });

@@ -176,7 +176,7 @@ function sUsers(a){ return (Array.isArray(a)?a:[]).map(x=>x&&typeof x==='object'
 function sMaster(s){   // inventario principal (lo escribe solo el administrador)
   if(!s||typeof s!=='object'||!Array.isArray(s.productos)) throw new Error('Archivo de datos no válido');
   return {v:3, productos:sProds(s.productos), entradas:sRecs(s.entradas), salidas:sRecs(s.salidas), conteo:sCount(s.conteo),
-    del:sMap(s.del,sNum), usuarios:sUsers(s.usuarios), conteoReset:sNum(s.conteoReset), admin:sMail(s.admin)};
+    del:sMap(s.del,sNum), usuarios:sUsers(s.usuarios), conteoReset:sNum(s.conteoReset), admin:sMail(s.admin), gen:sStr(s.gen,40)};
 }
 function sReg(s){ s=(s&&typeof s==='object')?s:{}; return {entradas:sRecs(s.entradas), salidas:sRecs(s.salidas), conteo:sCount(s.conteo)}; }
 const uid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,7);
@@ -201,14 +201,14 @@ function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('sh
    D.regs   : copia local de los archivos de los demás usuarios
    S        : vista combinada que usa la interfaz (se recalcula con derive())        */
 const KEY = 'inv_gambirasi_v3', KEY_OD = 'inv_gambirasi_od';
-function emptyMaster(){ return {v:3, productos:[], entradas:[], salidas:[], conteo:{}, del:{}, usuarios:[], conteoReset:0, admin:''}; }
-function emptyD(){ return {master:emptyMaster(), mine:sReg({}), regs:{}, etags:{}, owner:'', dirtyMaster:false, dirtyMine:false, forceMaster:false, rev:0, updated:''}; }
+function emptyMaster(){ return {v:3, productos:[], entradas:[], salidas:[], conteo:{}, del:{}, usuarios:[], conteoReset:0, admin:'', gen:''}; }
+function emptyD(){ return {master:emptyMaster(), mine:sReg({}), regs:{}, etags:{}, owner:'', dirtyMaster:false, dirtyMine:false, forceMaster:false, rev:0, updated:'', syncedAt:0}; }
 function loadD(){
   try{ const r=localStorage.getItem(KEY); if(r){ const j=JSON.parse(r), d=emptyD();
     d.master=sMaster(j.master); d.mine=sReg(j.mine);
     Object.keys(j.regs||{}).forEach(k=>{ if(RX_FILE.test(k)) d.regs[k]=sReg(j.regs[k]); });
     d.etags=sMap(j.etags,v=>sStr(v,300)); d.owner=sMail(j.owner); d.dirtyMaster=!!j.dirtyMaster; d.dirtyMine=!!j.dirtyMine;
-    d.forceMaster=!!j.forceMaster; d.rev=sNum(j.rev); d.updated=sStr(j.updated,40); return d; } }catch(e){}
+    d.forceMaster=!!j.forceMaster; d.rev=sNum(j.rev); d.updated=sStr(j.updated,40); d.syncedAt=sNum(j.syncedAt); return d; } }catch(e){}
   return emptyD();
 }
 let D = loadD(), S = {productos:[], entradas:[], salidas:[], conteo:{}, conteoInfo:{}};
@@ -639,8 +639,8 @@ $('#filex').addEventListener('change', async ev=>{
     if(f.name.toLowerCase().endsWith('.json')){
       if(!isAdmin()) return toast('Solo el administrador puede importar');
       const j = sMaster(JSON.parse(await f.text()));
-      if(!confirm('Esto reemplazará el inventario principal. ¿Continuar?')) return;
-      D.master = Object.assign(j, {usuarios:D.master.usuarios, admin:D.master.admin||me()}); D.forceMaster=true; save('master'); render(); return toast('Copia restaurada');
+      if(!confirm('Esto REEMPLAZA el inventario principal en todos los equipos. ¿Continuar?')) return;
+      D.master = Object.assign(j, {usuarios:D.master.usuarios, admin:D.master.admin||me(), gen:uid()}); D.forceMaster=true; save('master'); render(); return toast('Copia restaurada');
     }
     await loadXLSX();
     const wb = XLSX.read(await f.arrayBuffer(), {type:'array'});
@@ -674,8 +674,8 @@ function importWorkbook(wb){
       let c = r[ic]!=null && r[ic]!=='' ? (typeof r[ic]==='number'? String(r[ic]).padStart(5,'0') : clean(r[ic])) : byDesc.get(clean(r[idsc]));
       if(!c || !seen.has(c)) return; out.push({id:uid(), doc:clean(r[0]), f, c, q, ts:Date.now(), u:me()}); }); return out; };
   const entradas = mov('Entradas'), salidas = mov('Salidas');
-  if(!confirm('Se importarán '+productos.length+' productos, '+entradas.length+' entradas y '+salidas.length+' salidas, reemplazando los datos actuales. ¿Continuar?')) return {p:0,e:0,s:0};
-  D.master = Object.assign(emptyMaster(), {productos, entradas, salidas, usuarios:D.master.usuarios, admin:D.master.admin||me()}); D.forceMaster=true; save('master');
+  if(!confirm('Se importarán '+productos.length+' productos, '+entradas.length+' entradas y '+salidas.length+' salidas y REEMPLAZARÁN el inventario principal en todos los equipos. ¿Continuar?')) return {p:0,e:0,s:0};
+  D.master = Object.assign(emptyMaster(), {productos, entradas, salidas, usuarios:D.master.usuarios, admin:D.master.admin||me(), gen:uid()}); D.forceMaster=true; save('master');
   return {p:productos.length, e:entradas.length, s:salidas.length};
 }
 
@@ -786,21 +786,34 @@ function mergeMaster(L,R){
   const reset=Math.max(L.conteoReset||0,R.conteoReset||0), cnt=mergeCount(L.conteo,R.conteo);
   Object.keys(cnt).forEach(k=>{ if(cnt[k].ts<reset) delete cnt[k]; });
   return {v:3, productos:[...pm.values()], entradas:byId(L.entradas,R.entradas,del), salidas:byId(L.salidas,R.salidas,del), conteo:cnt, del,
-    usuarios:[...um.values()], conteoReset:reset, admin:L.admin||R.admin};
+    usuarios:[...um.values()], conteoReset:reset, admin:L.admin||R.admin, gen:L.gen||R.gen||''};
 }
 async function readJSON(path){ const r = await graph(path, {raw:true}); return r ? r.json() : null; }
+function rebaseOn(R){
+  if(!D.dirtyMaster) return R;                                            // nada pendiente en este equipo
+  const since = D.syncedAt || od().last || 0, L = D.master, nw = x => (x.ets||x.ts||0) > since;
+  const pend = {productos:L.productos.filter(p=>(p.ts||0)>since), entradas:L.entradas.filter(nw), salidas:L.salidas.filter(nw),
+    conteo:Object.fromEntries(Object.entries(L.conteo).filter(([k,x])=>x.ts>since)), del:Object.fromEntries(Object.entries(L.del).filter(([k,v])=>v>since)),
+    usuarios:L.usuarios.filter(u=>u.ts>since), conteoReset:0, admin:L.admin, gen:R.gen};
+  return mergeMaster(pend, R);
+}
 async function syncMaster(admin){
+  const t0 = Date.now();
   for(let i=0;i<3;i++){
     const meta = await graph(ip(MASTER_FILE));
     const R = meta ? sMaster(await readJSON(ip(MASTER_FILE)+':/content')) : null;
-    if(!admin){ if(R) D.master = R; return; }                    // los usuarios solo leen el inventario principal
-    let M = !R ? D.master : D.forceMaster ? Object.assign({}, D.master, {usuarios: mergeMaster(D.master,R).usuarios}) : mergeMaster(D.master,R);
+    if(!admin){ if(R) D.master = R; D.syncedAt = t0; return; }   // los usuarios solo leen el inventario principal
+    let M;
+    if(!R) M = D.master;
+    else if(D.forceMaster) M = Object.assign({}, D.master, {usuarios: mergeMaster(D.master,R).usuarios});
+    else if((R.gen||'') !== (D.master.gen||'')) M = rebaseOn(R);          // otro equipo importó: manda la copia de OneDrive
+    else M = mergeMaster(D.master,R);
     if(!M.admin) M.admin = me();
     D.master = M;
-    if(R && !D.dirtyMaster && !D.forceMaster) return;
+    if(R && !D.dirtyMaster && !D.forceMaster){ D.syncedAt = t0; return; }
     const rev = D.rev, hdr = Object.assign({}, J); if(meta && meta.eTag) hdr['If-Match'] = meta.eTag;
     try{ await graph(meta ? itemUrl(meta.id)+'/content' : ip(MASTER_FILE)+':/content', {method:'PUT', headers:hdr, body:JSON.stringify(M)});
-      if(D.rev===rev) D.dirtyMaster=false; D.forceMaster=false; return;
+      if(D.rev===rev) D.dirtyMaster=false; D.forceMaster=false; D.syncedAt = t0; return;
     }catch(e){ if(e.status===412 && i<2) continue; throw e; }
   }
 }

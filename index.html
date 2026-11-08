@@ -1032,7 +1032,17 @@ async function addUser(){
     const now = Date.now(), ex = D.master.usuarios.find(u=>u.email===email);
     if(ex) Object.assign(ex, {nombre, file, activo:true, ts:now}); else D.master.usuarios.push({email, nombre, file, activo:true, ts:now});
     save('master'); await autoSync(); render(); toast('Usuario agregado. Le llegará un correo con el link.');
-  }catch(e){ toast('No se pudo agregar: '+e.message); }
+  }catch(e){
+    if(/shar|compart|invit/i.test(e.message) && !/@acuariosdelgolfo\.com$/.test(email)){
+      openSheet(`<h2>Primero hay que invitar a esta persona</h2>
+        <p style="font-size:14px;margin:8px 0">Microsoft no deja compartir el inventario con <b>${esc(email)}</b> porque es una cuenta externa (Gmail, Hotmail u otra) que todavía no está invitada en Acuarios del Golfo.</p>
+        <ol style="font-size:14px;margin:8px 0 8px 18px;line-height:1.6"><li>Toca <b>Abrir invitación</b> (se abre Microsoft Entra con tu cuenta de administrador).</li>
+        <li>Escribe el correo <b>${esc(email)}</b> y el nombre, y toca <b>Revisar + invitar → Invitar</b>.</li>
+        <li>Vuelve aquí y toca <b>Agregar usuario</b> otra vez.</li></ol>
+        <div class="actions"><button class="btn ghost" onclick="closeSheet()">Cerrar</button>
+        <a class="btn primary" style="text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center" href="https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/InviteUser.ReactView/tenantType/AAD" target="_blank" rel="noopener noreferrer">Abrir invitación</a></div>`);
+    } else toast('No se pudo agregar: '+e.message);
+  }
   finally{ const b2=$('#ubtn'); if(b2){ b2.disabled=false; b2.textContent='Agregar usuario'; } }
 }
 function reAddUser(email){ const u = D.master.usuarios.find(x=>x.email===email); if(!u) return; $('#un').value=u.nombre; $('#ue').value=u.email; addUser(); }

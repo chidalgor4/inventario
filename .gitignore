@@ -1,0 +1,5 @@
+# Nunca subir datos del inventario
+datos*.json
+inventario*.json
+*.xlsx
+*.xlsm

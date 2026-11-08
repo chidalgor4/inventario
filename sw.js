@@ -1,6 +1,6 @@
 /* Service worker: permite abrir la app sin señal.
    Cambia VERSION cada vez que subas un index.html nuevo. */
-const VERSION = 'inv-v5';
+const VERSION = 'inv-v6';
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './xlsx.full.min.js'];
 
 self.addEventListener('install', e => {
@@ -22,7 +22,7 @@ self.addEventListener('fetch', e => {
 
   // Página principal: intenta red (para tener la última versión) y si no hay señal usa la copia guardada
   if (req.mode === 'navigate') {
-    e.respondWith(fetch(req).then(r => {
+    e.respondWith(fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }).then(r => {   // siempre revisa si hay versión nueva
       if (r.ok) { const cp = r.clone(); caches.open(VERSION).then(c => c.put('./index.html', cp)); } return r;
     }).catch(() => caches.match('./index.html')));
     return;

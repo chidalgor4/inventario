@@ -92,6 +92,8 @@ nav button.add svg{width:26px;height:26px}
 .scrim.show{display:block}
 .sheet{position:fixed;left:0;right:0;bottom:0;z-index:50;max-height:92%;overflow:auto;background:var(--bg);border-radius:22px 22px 0 0;padding:8px 16px calc(20px + env(safe-area-inset-bottom,0px));transform:translateY(105%);transition:transform .22s ease;max-width:680px;margin:0 auto}
 .sheet.show{transform:none}
+.sheet.wide{max-width:980px}
+.tbl{width:100%;border-collapse:collapse;font-size:13px;margin:6px 0 12px}.tbl th,.tbl td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}.tbl th{color:var(--muted);font-weight:600;font-size:12px}.tbl td.n,.tbl th.n{text-align:right;white-space:nowrap}.tbl .neg{color:var(--bad);font-weight:700}.tblwrap{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:0 6px}
 .grab{width:42px;height:5px;border-radius:9px;background:var(--line);margin:4px auto 14px}
 .sheet h2{font-size:19px;margin-bottom:4px}
 .field{margin:12px 0}
@@ -136,6 +138,7 @@ code{background:var(--brand-soft);padding:1px 6px;border-radius:6px;font-size:13
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"></div>
 <div class="toast" id="toast"></div>
 <input type="file" id="filex" accept=".xlsx,.xlsm,.xls,.json" hidden>
+<input type="file" id="filec" accept=".xlsx,.xlsm,.xls,.csv" hidden>
 
 <script>
 if(window.top!==window.self){ document.documentElement.innerHTML=''; throw new Error('frame'); }   // no permitir que otra página la incruste
@@ -298,7 +301,7 @@ function render(){
 }
 
 /* ---------- hojas modales ---------- */
-function openSheet(html){ $('#sheet').innerHTML = '<div class="grab"></div>'+html; $('#scrim').classList.add('show'); $('#sheet').classList.add('show'); $('#sheet').scrollTop=0; }
+function openSheet(html){ $('#sheet').classList.remove('wide'); $('#sheet').innerHTML = '<div class="grab"></div>'+html; $('#scrim').classList.add('show'); $('#sheet').classList.add('show'); $('#sheet').scrollTop=0; }
 function closeSheet(){ $('#scrim').classList.remove('show'); $('#sheet').classList.remove('show'); }
 
 /* ---------- vista: Inicio ---------- */
@@ -437,7 +440,7 @@ function vMov(){
   let html='', cur='';
   rows.slice(0,ui.mlimit).forEach(m=>{ if(m.f!==cur){ cur=m.f; html += `<div class="date-h">${fdate(cur)}</div>`; } html += `<div class="card list" style="margin-bottom:6px">${movItem(m)}</div>`; });
   return `
-  <div class="top"><div><h1>Movimientos</h1><small>${rows.length} registros</small></div></div>
+  <div class="top"><div><h1>Movimientos</h1><small>${rows.length} registros</small></div><button class="btn ghost" style="min-height:42px;padding:8px 14px" onclick="openCarga()">Subir plantilla</button></div>
   <div class="seg"><button class="${ui.mtipo==='e'?'on':''}" onclick="ui.mtipo='e';ui.mlimit=80;render()">Entradas</button><button class="${ui.mtipo==='s'?'on':''}" onclick="ui.mtipo='s';ui.mlimit=80;render()">Salidas</button></div>
   <div class="search"><input type="search" placeholder="Producto, código o documento" value="${esc(ui.mq)}" onchange="ui.mq=this.value;ui.mlimit=80;render()">
     <div class="row" style="margin-top:8px"><div class="field" style="margin:0"><label>Desde</label><input type="date" value="${esc(ui.mdesde)}" onchange="ui.mdesde=this.value;render()"></div>
@@ -583,6 +586,10 @@ function vSet(){
       ${on&&!adm&&curScope()!==SCOPE_ALL?'<div class="info bad" style="margin-top:10px">Aún no tienes acceso a la carpeta compartida.'+(o.needApproval?' Microsoft indica que falta la aprobación del administrador de sistemas de la empresa.':'')+'</div><button class="btn primary full" style="margin-top:8px" onclick="requestShared()">Solicitar acceso</button>':''}
       ${o.last?'<p style="font-size:13px;color:var(--muted);margin-top:8px">Última sincronización: '+esc(fdt(o.last))+'</p>':''}</div>
     ${adm?usersBlock(btn):''}
+    ${on?`<div class="set-block"><h3>Carga masiva de consumo</h3>
+      <p style="font-size:14px">Sube desde la computadora las salidas del día (balanceado, medicamentos y demás) de todas las piscinas y precrías en un solo archivo de Excel.</p>
+      <div class="stack"><button class="btn primary" onclick="openCarga()">Subir plantilla de consumo</button>
+      <button class="btn ghost" onclick="downloadTemplate()">Descargar plantilla vacía</button></div></div>`:''}
     <div class="set-block"><h3>Excel</h3>
       <div class="stack">
         <button class="btn ghost" onclick="exportXLSX()">Exportar a Excel (.xlsx)</button>
@@ -677,6 +684,135 @@ function importWorkbook(wb){
   if(!confirm('Se importarán '+productos.length+' productos, '+entradas.length+' entradas y '+salidas.length+' salidas y REEMPLAZARÁN el inventario principal en todos los equipos. ¿Continuar?')) return {p:0,e:0,s:0};
   D.master = Object.assign(emptyMaster(), {productos, entradas, salidas, usuarios:D.master.usuarios, admin:D.master.admin||me(), gen:uid()}); D.forceMaster=true; save('master');
   return {p:productos.length, e:entradas.length, s:salidas.length};
+}
+
+/* ---------- carga masiva de consumo (salidas desde plantilla Excel) ---------- */
+const nrm = s => clean(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+function xNum(v){ if(typeof v==='number') return v; let s=String(v??'').replace(/\s/g,''); if(!s) return NaN;
+  if(s.includes(',') && !s.includes('.')) s=s.replace(',','.'); else s=s.replace(/,/g,''); const n=+s; return Number.isFinite(n)?n:NaN; }
+function xDate2(v){ const d=xDate(v); if(d) return d; const m=String(v??'').trim().match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if(!m) return ''; const y=m[3].length===2?'20'+m[3]:m[3], mo=+m[2], da=+m[1]; if(mo<1||mo>12||da<1||da>31) return '';
+  return y+'-'+String(mo).padStart(2,'0')+'-'+String(da).padStart(2,'0'); }
+function normDoc(v){
+  let s = clean(v).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,''); if(!s) return '';
+  let m = s.match(/^PRE(?:CRIA)?\s*[-#.:Nº°O]*\s*0*(\d{1,2})$/); if(m) return 'PRE'+m[1].padStart(2,'0');
+  s = s.replace(/^(PISCINA|PISC|PSC|P)\s*[-#.:Nº°O]*\s*/,'');
+  m = s.match(/^0*(\d{1,2})\s*(B?)$/); if(m) return m[1].padStart(2,'0')+m[2];
+  return sStr(s,40);
+}
+function prodResolver(){
+  const byC = new Map(S.productos.map(p=>[p.c,p])), byD = new Map(S.productos.map(p=>[nrm(p.d),p]));
+  return v => { if(v==null||v==='') return null;
+    if(typeof v==='number'){ const s=String(v); return byC.get(s.padStart(5,'0'))||byC.get(s)||null; }
+    const s = clean(v), code = s.split(/\s*[·|]\s*|\s+/)[0];
+    return byC.get(s) || byC.get(code) || (/^\d+$/.test(code) && byC.get(code.padStart(5,'0'))) || byD.get(nrm(s))
+      || byD.get(nrm(s.replace(/^\S+\s*[·|]\s*/,'').replace(/\s*\([^)]*\)\s*$/,''))) || null; };
+}
+function parseConsumo(wb, defDate){
+  const resolve = prodResolver(), out = [];
+  const add = (hoja,fila,fv,dv,p,q,raw) => {
+    const f = (fv!=null && fv!=='') ? xDate2(fv) : defDate, doc = normDoc(dv), e = [], w = [];
+    if(!p) e.push('Producto no encontrado'+(raw!=null&&raw!==''?' ("'+sStr(clean(raw),50)+'")':''));
+    if(!(q>0)) e.push('Cantidad no válida');
+    if(!f) e.push('Fecha no válida');
+    if(!doc) e.push('Falta la piscina (PSC) o precría (PRE)');
+    else if(!PSC.includes(doc) && !PRE.includes(doc)) w.push('Destino no estándar: '+doc);
+    if(f && f>todayISO()) w.push('Fecha futura');
+    out.push({hoja, fila, f, doc, c:p?p.c:'', q, e, w});
+  };
+  wb.SheetNames.forEach(name=>{
+    if(/instruc|producto/.test(nrm(name))) return;
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, raw:true, defval:null});
+    let h=-1, mode='';
+    for(let i=0;i<Math.min(rows.length,20);i++){ const hs=(rows[i]||[]).map(nrm);
+      if(hs.some(x=>x.startsWith('codigo')) && hs.some(x=>x.startsWith('cantidad'))){ h=i; mode='lista'; break; }
+      if(hs.some(x=>/^(psc|piscina|destino)/.test(x)) && (rows[i]||[]).some(c=>resolve(c))){ h=i; mode='matriz'; break; } }
+    if(h<0) return;
+    const head = rows[h].map(nrm), col = (...ks) => head.findIndex(x=>ks.some(k=>x.startsWith(k)));
+    const iF = col('fecha'), iD = col('psc','piscina','destino');
+    if(mode==='lista'){
+      const iC=col('codigo'), iDs=col('descrip'), iQ=col('cantidad');
+      rows.slice(h+1).forEach((r,k)=>{ if(!r || r.every(c=>c==null||c==='')) return;
+        const raw = (r[iC]!=null&&r[iC]!=='') ? r[iC] : (iDs>=0 ? r[iDs] : null);
+        add(name, h+2+k, iF>=0?r[iF]:null, iD>=0?r[iD]:null, resolve(r[iC])||(iDs>=0?resolve(r[iDs]):null), xNum(r[iQ]), raw); });
+    } else {
+      const pcols = rows[h].map((c,j)=>[j,resolve(c)]).filter(([j,p])=>p && j!==iF && j!==iD);
+      rows.slice(h+1).forEach((r,k)=>{ if(!r) return;
+        pcols.forEach(([j,p])=>{ const v=r[j]; if(v==null||v==='') return; const q=xNum(v); if(q===0) return;
+          add(name, h+2+k, iF>=0?r[iF]:null, iD>=0?r[iD]:null, p, q, null); }); });
+    }
+  });
+  const exist = new Set(S.salidas.map(m=>m.f+'|'+m.doc+'|'+m.c+'|'+m.q));
+  out.forEach(r=>{ r.dup = !r.e.length && exist.has(r.f+'|'+r.doc+'|'+r.c+'|'+r.q); });
+  return out;
+}
+let carga = null;   // {nombre, wb, fecha, filas, dups}
+function openCarga(){ if(!od().user) return toast('Inicia sesión para registrar'); $('#filec').value=''; $('#filec').click(); }
+$('#filec').addEventListener('change', async ev=>{
+  const f = ev.target.files[0]; if(!f) return;
+  try{ await loadXLSX(); const wb = XLSX.read(await f.arrayBuffer(), {type:'array', cellDates:true});
+    carga = {nombre:sStr(f.name,80), wb, fecha:todayISO(), dups:false}; carga.filas = parseConsumo(wb, carga.fecha);
+    if(!carga.filas.length) return toast('No encontré consumos en el archivo. Usa la plantilla (Ajustes → Descargar plantilla).');
+    showCarga();
+  }catch(e){ toast('Error al leer el archivo: '+e.message); }
+});
+function cargaFecha(v){ if(!carga || !RX_DT.test(v)) return; carga.fecha=v; carga.filas=parseConsumo(carga.wb, v); showCarga(); }
+function cargaDups(v){ if(!carga) return; carga.dups=!!v; showCarga(); }
+const cargaOk = () => carga.filas.filter(r=>!r.e.length && (carga.dups || !r.dup));
+function showCarga(){
+  const F = carga.filas, ok = cargaOk(), err = F.filter(r=>r.e.length), dup = F.filter(r=>r.dup), warn = F.filter(r=>!r.e.length&&r.w.length);
+  const m = calc(), tot = new Map(); ok.forEach(r=>tot.set(r.c,(tot.get(r.c)||0)+r.q));
+  const prods = [...tot.entries()].sort((a,b)=>pName(a[0]).localeCompare(pName(b[0]),'es'));
+  const negs = prods.filter(([c,q])=>m.get(c).stock-q<0).length;
+  const fechas = [...new Set(ok.map(r=>r.f))].sort(), destinos = new Set(ok.map(r=>r.doc));
+  openSheet(`<h2>Revisar carga de consumo</h2>
+    <div style="color:var(--muted);font-size:14px">${esc(carga.nombre)} · ${F.length} filas leídas</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">
+      <span class="pill ok">${ok.length} salidas a registrar</span>${dup.length?`<span class="pill warn">${dup.length} posibles duplicadas</span>`:''}${warn.length?`<span class="pill warn">${warn.length} con aviso</span>`:''}${err.length?`<span class="pill bad">${err.length} con error (no se registran)</span>`:''}</div>
+    <div class="row"><div class="field"><label>Fecha para filas sin fecha</label><input type="date" value="${esc(carga.fecha)}" max="${todayISO()}" onchange="cargaFecha(this.value)"></div>
+      <div class="field"><label>Resumen</label><div class="info" style="margin:0">${fechas.length?esc(fechas.map(fdate).join(', ')):'—'} · ${destinos.size} destinos · ${prods.length} productos</div></div></div>
+    ${negs?`<div class="info bad">${negs} producto(s) quedarían con stock negativo. Revisa si falta registrar una entrada.</div>`:''}
+    <h3 style="font-size:15px;margin-top:6px">Total por producto</h3>
+    <div class="tblwrap"><table class="tbl"><tr><th>Producto</th><th class="n">Sale</th><th class="n">Stock actual</th><th class="n">Quedará</th></tr>
+      ${prods.map(([c,q])=>{ const s=m.get(c).stock, r=s-q; return `<tr><td>${esc(pName(c))}<br><span style="color:var(--muted)">${esc(c)}</span></td><td class="n">${fmt(q)} ${esc(pUnit(c))}</td><td class="n">${fmt(s)}</td><td class="n ${r<0?'neg':''}">${fmt(r)}</td></tr>`; }).join('')}</table></div>
+    ${err.length?`<h3 style="font-size:15px">Errores (${err.length})</h3><div class="tblwrap"><table class="tbl"><tr><th>Hoja / fila</th><th>Problema</th></tr>
+      ${err.slice(0,200).map(r=>`<tr><td>${esc(r.hoja)} · fila ${r.fila}</td><td>${esc(r.e.join('; '))}</td></tr>`).join('')}</table></div>`:''}
+    ${dup.length?`<label style="display:flex;gap:10px;align-items:center;font-size:14px;margin:8px 0"><input type="checkbox" ${carga.dups?'checked':''} onchange="cargaDups(this.checked)"> Registrar también las ${dup.length} posibles duplicadas (misma fecha, destino, producto y cantidad que una salida ya registrada)</label>`:''}
+    <details><summary style="cursor:pointer;font-size:14px;margin:6px 0">Ver detalle de las ${ok.length} salidas</summary><div class="tblwrap"><table class="tbl"><tr><th>Fecha</th><th>PSC/PRE</th><th>Producto</th><th class="n">Cantidad</th><th>Aviso</th></tr>
+      ${ok.slice(0,1500).map(r=>`<tr><td>${esc(fdate(r.f))}</td><td>${esc(docLab(r.doc)||r.doc)}</td><td>${esc(pName(r.c))}</td><td class="n">${fmt(r.q)} ${esc(pUnit(r.c))}</td><td>${esc((r.dup?['Posible duplicada']:[]).concat(r.w).join('; '))}</td></tr>`).join('')}</table></div></details>
+    <div class="actions" style="margin-top:12px"><button class="btn ghost" onclick="closeSheet();carga=null">Cancelar</button>
+      <button class="btn primary" ${ok.length?'':'disabled'} onclick="saveCarga()">Registrar ${ok.length} salidas</button></div>`);
+  $('#sheet').classList.add('wide');
+}
+function saveCarga(){
+  if(!carga) return; const ok = cargaOk(); if(!ok.length) return;
+  if(!confirm('Se registrarán '+ok.length+' salidas a tu nombre. ¿Continuar?')) return;
+  const now = Date.now(), T = target();
+  ok.forEach((r,k)=>T.salidas.push({id:uid(), doc:r.doc, f:r.f, c:r.c, q:r.q, ts:now+k, u:me()}));
+  save(tgtName()); carga = null; closeSheet(); ui.mtipo='s'; go('mov'); toast(ok.length+' salidas registradas');
+}
+function downloadTemplate(){
+  loadXLSX().then(()=>{
+    const uso = new Map(); S.salidas.forEach(m=>uso.set(m.c,(uso.get(m.c)||0)+1));
+    const top = S.productos.slice().sort((a,b)=>(uso.get(b.c)||0)-(uso.get(a.c)||0)).slice(0,15);
+    const head = ['Fecha','PSC/PRE', ...top.map(p=>p.c+' · '+p.d+' ('+p.u+')')];
+    const mat = [['CONSUMO POR PISCINA / PRECRÍA — escribe la cantidad que sale de cada producto'],
+      ['Deja la Fecha vacía para usar la fecha que elijas al subir. Puedes agregar columnas con otros productos: escribe el código en el encabezado (ver hoja Productos).'],
+      [], head, ...[...PSC,...PRE].map(d=>['', d])];
+    const lista = [['CONSUMO EN LISTA — una fila por producto y destino'], [], ['Fecha','PSC/PRE','Código','Descripción','Cantidad']];
+    const prod = [['Código','Descripción','Medida','Stock actual'], ...S.productos.map(p=>[p.c,p.d,p.u,calc().get(p.c).stock])];
+    const inst = [['CÓMO USAR ESTA PLANTILLA'],[],
+      ['1. Llena la hoja "Por piscina" (una fila por piscina o precría, una columna por producto) o la hoja "Lista" (una fila por salida). Puedes usar una o las dos.'],
+      ['2. Fecha: formato dd/mm/aaaa. Si la dejas vacía se usa la fecha que elijas al subir el archivo.'],
+      ['3. PSC/PRE: piscinas 01 a 20 y 09B; precrías PRE01 a PRE10 (también acepta "1", "PSC 1", "PRE 3").'],
+      ['4. Producto: usa el código de la hoja Productos (ej. 00743). En la hoja Lista también puedes escribir la descripción exacta.'],
+      ['5. Cantidad en la unidad del producto (SC, KG, LT). Las celdas vacías o en 0 se ignoran.'],
+      ['6. En la app: Movimientos → "Subir plantilla" (o Ajustes → Subir plantilla de consumo). Revisa el resumen y toca "Registrar".'],
+      ['7. La app avisa de errores, de salidas que parecen repetidas y de productos que quedarían en negativo antes de guardar.']];
+    const wb = XLSX.utils.book_new(), sh = (rows,w,n) => { const ws=XLSX.utils.aoa_to_sheet(rows); ws['!cols']=w.map(x=>({wch:x})); XLSX.utils.book_append_sheet(wb,ws,n); };
+    sh(mat, [12,10,...top.map(()=>22)], 'Por piscina'); sh(lista, [12,10,10,48,10], 'Lista'); sh(prod, [10,52,8,12], 'Productos'); sh(inst, [120], 'Instrucciones');
+    XLSX.writeFile(wb, 'Plantilla_consumo_'+todayISO()+'.xlsx'); toast('Plantilla descargada');
+  }).catch(e=>toast(e.message));
 }
 
 /* ---------- OneDrive (Microsoft Graph + OAuth2 PKCE, sin librerías) ---------- */

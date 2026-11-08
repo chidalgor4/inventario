@@ -709,7 +709,7 @@ function prodResolver(){
       || byD.get(nrm(s.replace(/^\S+\s*[·|]\s*/,'').replace(/\s*\([^)]*\)\s*$/,''))) || null; };
 }
 function parseConsumo(wb, defDate){
-  const resolve = prodResolver(), out = [];
+  const resolve = prodResolver(), out = [], hojas = [];
   const add = (hoja,fila,fv,dv,p,q,raw) => {
     const f = (fv!=null && fv!=='') ? xDate2(fv) : defDate, doc = normDoc(dv), e = [], w = [];
     if(!p) e.push('Producto no encontrado'+(raw!=null&&raw!==''?' ("'+sStr(clean(raw),50)+'")':''));
@@ -722,26 +722,37 @@ function parseConsumo(wb, defDate){
   };
   wb.SheetNames.forEach(name=>{
     if(/instruc|producto/.test(nrm(name))) return;
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, raw:true, defval:null});
+    const ws = wb.Sheets[name]; if(!ws || !ws['!ref']) return;
+    const off = XLSX.utils.decode_range(ws['!ref']).s.r, rprops = ws['!rows'] || [];
+    const oculta = i => !!(rprops[off+i] && rprops[off+i].hidden);          // filas escondidas por un filtro: no se suben
+    const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null, blankrows:true});
     let h=-1, mode='';
     for(let i=0;i<Math.min(rows.length,20);i++){ const hs=(rows[i]||[]).map(nrm);
-      if(hs.some(x=>x.startsWith('codigo')) && hs.some(x=>x.startsWith('cantidad'))){ h=i; mode='lista'; break; }
+      if(hs.some(x=>x.startsWith('cantidad')) && hs.some(x=>/^(codigo|cod\b|producto|nombre|descrip)/.test(x))){ h=i; mode='lista'; break; }
       if(hs.some(x=>/^(psc|piscina|destino)/.test(x)) && (rows[i]||[]).some(c=>resolve(c))){ h=i; mode='matriz'; break; } }
     if(h<0) return;
     const head = rows[h].map(nrm), col = (...ks) => head.findIndex(x=>ks.some(k=>x.startsWith(k)));
     const iF = col('fecha'), iD = col('psc','piscina','destino');
+    const st = {name, filas:0, ocultas:0}; hojas.push(st);
+    const fila = k => off+h+2+k;                                             // número de fila real en Excel
     if(mode==='lista'){
-      const iC=col('codigo'), iDs=col('descrip'), iQ=col('cantidad');
+      const iC=col('codigo','cod ','producto'), iDs=col('descrip','nombre'), iQ=col('cantidad');
       rows.slice(h+1).forEach((r,k)=>{ if(!r || r.every(c=>c==null||c==='')) return;
-        const raw = (r[iC]!=null&&r[iC]!=='') ? r[iC] : (iDs>=0 ? r[iDs] : null);
-        add(name, h+2+k, iF>=0?r[iF]:null, iD>=0?r[iD]:null, resolve(r[iC])||(iDs>=0?resolve(r[iDs]):null), xNum(r[iQ]), raw); });
+        if(oculta(h+1+k)){ st.ocultas++; return; }
+        st.filas++;
+        const raw = (iC>=0&&r[iC]!=null&&r[iC]!=='') ? r[iC] : (iDs>=0 ? r[iDs] : null);
+        add(name, fila(k), iF>=0?r[iF]:null, iD>=0?r[iD]:null, (iC>=0?resolve(r[iC]):null)||(iDs>=0?resolve(r[iDs]):null), xNum(r[iQ]), raw); });
     } else {
       const pcols = rows[h].map((c,j)=>[j,resolve(c)]).filter(([j,p])=>p && j!==iF && j!==iD);
       rows.slice(h+1).forEach((r,k)=>{ if(!r) return;
+        const has = pcols.some(([j])=>r[j]!=null&&r[j]!=='');
+        if(oculta(h+1+k)){ if(has) st.ocultas++; return; }
+        if(has) st.filas++;
         pcols.forEach(([j,p])=>{ const v=r[j]; if(v==null||v==='') return; const q=xNum(v); if(q===0) return;
-          add(name, h+2+k, iF>=0?r[iF]:null, iD>=0?r[iD]:null, p, q, null); }); });
+          add(name, fila(k), iF>=0?r[iF]:null, iD>=0?r[iD]:null, p, q, null); }); });
     }
   });
+  out.hojas = hojas;
   const exist = new Set(S.salidas.map(m=>m.f+'|'+m.doc+'|'+m.c+'|'+m.q));
   out.forEach(r=>{ r.dup = !r.e.length && exist.has(r.f+'|'+r.doc+'|'+r.c+'|'+r.q); });
   return out;
@@ -749,24 +760,30 @@ function parseConsumo(wb, defDate){
 let carga = null;   // {nombre, wb, fecha, filas, dups}
 function openCarga(){ if(!od().user) return toast('Inicia sesión para registrar'); $('#filec').value=''; $('#filec').click(); }
 $('#filec').addEventListener('change', async ev=>{
-  const f = ev.target.files[0]; if(!f) return;
-  try{ await loadXLSX(); const wb = XLSX.read(await f.arrayBuffer(), {type:'array', cellDates:true});
+  const f = ev.target.files[0]; if(!f) return; const buf = await f.arrayBuffer(); ev.target.value='';   // permite volver a elegir el mismo archivo
+  try{ await loadXLSX(); const wb = XLSX.read(buf, {type:'array', cellDates:true, cellStyles:true});
     carga = {nombre:sStr(f.name,80), wb, fecha:todayISO(), dups:false}; carga.filas = parseConsumo(wb, carga.fecha);
-    if(!carga.filas.length) return toast('No encontré consumos en el archivo. Usa la plantilla (Ajustes → Descargar plantilla).');
+    const hs = carga.filas.hojas.filter(x=>x.filas>0);
+    if(!hs.length) return toast(carga.filas.hojas.some(x=>x.ocultas)?'Todas las filas están ocultas por el filtro.':'No encontré consumos en el archivo. Usa la plantilla (Ajustes → Descargar plantilla).');
+    const act = (wb.Workbook&&wb.Workbook.Views&&wb.Workbook.Views[0]) ? wb.SheetNames[wb.Workbook.Views[0].activeTab||0] : '';
+    carga.sel = new Set(hs.length>1 && hs.some(x=>x.name===act) ? [act] : hs.map(x=>x.name));   // varias hojas: por defecto la que estaba abierta
     showCarga();
   }catch(e){ toast('Error al leer el archivo: '+e.message); }
 });
 function cargaFecha(v){ if(!carga || !RX_DT.test(v)) return; carga.fecha=v; carga.filas=parseConsumo(carga.wb, v); showCarga(); }
+function cargaHoja(n,v){ if(!carga) return; if(v) carga.sel.add(n); else carga.sel.delete(n); showCarga(); }
 function cargaDups(v){ if(!carga) return; carga.dups=!!v; showCarga(); }
-const cargaOk = () => carga.filas.filter(r=>!r.e.length && (carga.dups || !r.dup));
+const cargaRows = () => carga.filas.filter(r=>carga.sel.has(r.hoja));
+const cargaOk = () => cargaRows().filter(r=>!r.e.length && (carga.dups || !r.dup));
 function showCarga(){
-  const F = carga.filas, ok = cargaOk(), err = F.filter(r=>r.e.length), dup = F.filter(r=>r.dup), warn = F.filter(r=>!r.e.length&&r.w.length);
+  const F = cargaRows(), ok = cargaOk(), HS = carga.filas.hojas.filter(x=>x.filas>0||x.ocultas>0), ocultas = HS.filter(x=>carga.sel.has(x.name)).reduce((a,x)=>a+x.ocultas,0), err = F.filter(r=>r.e.length), dup = F.filter(r=>r.dup), warn = F.filter(r=>!r.e.length&&r.w.length);
   const m = calc(), tot = new Map(); ok.forEach(r=>tot.set(r.c,(tot.get(r.c)||0)+r.q));
   const prods = [...tot.entries()].sort((a,b)=>pName(a[0]).localeCompare(pName(b[0]),'es'));
   const negs = prods.filter(([c,q])=>m.get(c).stock-q<0).length;
   const fechas = [...new Set(ok.map(r=>r.f))].sort(), destinos = new Set(ok.map(r=>r.doc));
   openSheet(`<h2>Revisar carga de consumo</h2>
-    <div style="color:var(--muted);font-size:14px">${esc(carga.nombre)} · ${F.length} filas leídas</div>
+    <div style="color:var(--muted);font-size:14px">${esc(carga.nombre)} · ${F.length} consumos leídos${ocultas?` · <b>${ocultas} filas ocultas por filtro (no se suben)</b>`:''}</div>
+    ${HS.length>1?`<div class="info" style="margin:8px 0"><b>Hojas a subir:</b> ${HS.map(x=>`<label style="display:inline-flex;gap:6px;align-items:center;margin:4px 12px 0 0"><input type="checkbox" ${carga.sel.has(x.name)?'checked':''} onchange="cargaHoja(${jsa(x.name)},this.checked)"> ${esc(x.name)} (${x.filas} filas${x.ocultas?', '+x.ocultas+' ocultas':''})</label>`).join('')}</div>`:''}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">
       <span class="pill ok">${ok.length} salidas a registrar</span>${dup.length?`<span class="pill warn">${dup.length} posibles duplicadas</span>`:''}${warn.length?`<span class="pill warn">${warn.length} con aviso</span>`:''}${err.length?`<span class="pill bad">${err.length} con error (no se registran)</span>`:''}</div>
     <div class="row"><div class="field"><label>Fecha para filas sin fecha</label><input type="date" value="${esc(carga.fecha)}" max="${todayISO()}" onchange="cargaFecha(this.value)"></div>

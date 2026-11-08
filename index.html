@@ -766,7 +766,8 @@ $('#filec').addEventListener('change', async ev=>{
     const hs = carga.filas.hojas.filter(x=>x.filas>0);
     if(!hs.length) return toast(carga.filas.hojas.some(x=>x.ocultas)?'Todas las filas están ocultas por el filtro.':'No encontré consumos en el archivo. Usa la plantilla (Ajustes → Descargar plantilla).');
     const act = (wb.Workbook&&wb.Workbook.Views&&wb.Workbook.Views[0]) ? wb.SheetNames[wb.Workbook.Views[0].activeTab||0] : '';
-    carga.sel = new Set(hs.length>1 && hs.some(x=>x.name===act) ? [act] : hs.map(x=>x.name));   // varias hojas: por defecto la que estaba abierta
+    const plantilla = hs.every(x=>['por piscina','lista'].includes(nrm(x.name)));   // plantilla de la app: se usan sus dos hojas
+    carga.sel = new Set(hs.length>1 && !plantilla && hs.some(x=>x.name===act) ? [act] : hs.map(x=>x.name));   // otro Excel con varias hojas: solo la que estaba abierta
     showCarga();
   }catch(e){ toast('Error al leer el archivo: '+e.message); }
 });

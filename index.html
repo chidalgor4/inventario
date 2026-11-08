@@ -587,7 +587,7 @@ function vSet(){
       ${o.last?'<p style="font-size:13px;color:var(--muted);margin-top:8px">Última sincronización: '+esc(fdt(o.last))+'</p>':''}</div>
     ${adm?usersBlock(btn):''}
     ${on?`<div class="set-block"><h3>Carga masiva de consumo</h3>
-      <p style="font-size:14px">Sube desde la computadora las salidas del día (balanceado, medicamentos y demás) de todas las piscinas y precrías en un solo archivo de Excel.</p>
+      <p style="font-size:14px">Sube desde la computadora las salidas (balanceado, medicamentos y demás) de todas las piscinas y precrías. Se lee solo la pestaña <b>CONSUMO</b> y solo las filas visibles del filtro.</p>
       <div class="stack"><button class="btn primary" onclick="openCarga()">Subir plantilla de consumo</button>
       <button class="btn ghost" onclick="downloadTemplate()">Descargar plantilla vacía</button></div></div>`:''}
     <div class="set-block"><h3>Excel</h3>
@@ -720,8 +720,9 @@ function parseConsumo(wb, defDate){
     if(f && f>todayISO()) w.push('Fecha futura');
     out.push({hoja, fila, f, doc, c:p?p.c:'', q, e, w});
   };
-  wb.SheetNames.forEach(name=>{
-    if(/instruc|producto/.test(nrm(name))) return;
+  const consumo = wb.SheetNames.find(n=>nrm(n)==='consumo');            // si existe la pestaña CONSUMO, solo se lee esa
+  (consumo ? [consumo] : wb.SheetNames).forEach(name=>{
+    if(!consumo && /instruc|producto/.test(nrm(name))) return;
     const ws = wb.Sheets[name]; if(!ws || !ws['!ref']) return;
     const off = XLSX.utils.decode_range(ws['!ref']).s.r, rprops = ws['!rows'] || [];
     const oculta = i => !!(rprops[off+i] && rprops[off+i].hidden);          // filas escondidas por un filtro: no se suben
@@ -764,9 +765,9 @@ $('#filec').addEventListener('change', async ev=>{
   try{ await loadXLSX(); const wb = XLSX.read(buf, {type:'array', cellDates:true, cellStyles:true});
     carga = {nombre:sStr(f.name,80), wb, fecha:todayISO(), dups:false}; carga.filas = parseConsumo(wb, carga.fecha);
     const hs = carga.filas.hojas.filter(x=>x.filas>0);
-    if(!hs.length) return toast(carga.filas.hojas.some(x=>x.ocultas)?'Todas las filas están ocultas por el filtro.':'No encontré consumos en el archivo. Usa la plantilla (Ajustes → Descargar plantilla).');
+    if(!hs.length) return toast(carga.filas.hojas.some(x=>x.ocultas)?'Todas las filas de la pestaña CONSUMO están ocultas por el filtro.':'No encontré consumos. La pestaña debe llamarse CONSUMO y tener las columnas FECHA, PRODUCTO, NOMBRE, CANTIDAD y PISCINA.');
     const act = (wb.Workbook&&wb.Workbook.Views&&wb.Workbook.Views[0]) ? wb.SheetNames[wb.Workbook.Views[0].activeTab||0] : '';
-    const plantilla = hs.every(x=>['por piscina','lista'].includes(nrm(x.name)));   // plantilla de la app: se usan sus dos hojas
+    const plantilla = false;
     carga.sel = new Set(hs.length>1 && !plantilla && hs.some(x=>x.name===act) ? [act] : hs.map(x=>x.name));   // otro Excel con varias hojas: solo la que estaba abierta
     showCarga();
   }catch(e){ toast('Error al leer el archivo: '+e.message); }
@@ -811,24 +812,17 @@ function saveCarga(){
 }
 function downloadTemplate(){
   loadXLSX().then(()=>{
-    const uso = new Map(); S.salidas.forEach(m=>uso.set(m.c,(uso.get(m.c)||0)+1));
-    const top = S.productos.slice().sort((a,b)=>(uso.get(b.c)||0)-(uso.get(a.c)||0)).slice(0,15);
-    const head = ['Fecha','PSC/PRE', ...top.map(p=>p.c+' · '+p.d+' ('+p.u+')')];
-    const mat = [['CONSUMO POR PISCINA / PRECRÍA — escribe la cantidad que sale de cada producto'],
-      ['Deja la Fecha vacía para usar la fecha que elijas al subir. Puedes agregar columnas con otros productos: escribe el código en el encabezado (ver hoja Productos).'],
-      [], head, ...[...PSC,...PRE].map(d=>['', d])];
-    const lista = [['CONSUMO EN LISTA — una fila por producto y destino'], [], ['Fecha','PSC/PRE','Código','Descripción','Cantidad']];
+    const cons = [['FECHA','PRODUCTO','NOMBRE','CANTIDAD','PISCINA','EQUIPO_CONTROL']];
     const prod = [['Código','Descripción','Medida','Stock actual'], ...S.productos.map(p=>[p.c,p.d,p.u,calc().get(p.c).stock])];
     const inst = [['CÓMO USAR ESTA PLANTILLA'],[],
-      ['1. Llena la hoja "Por piscina" (una fila por piscina o precría, una columna por producto) o la hoja "Lista" (una fila por salida). Puedes usar una o las dos.'],
-      ['2. Fecha: formato dd/mm/aaaa. Si la dejas vacía se usa la fecha que elijas al subir el archivo.'],
-      ['3. PSC/PRE: piscinas 01 a 20 y 09B; precrías PRE01 a PRE10 (también acepta "1", "PSC 1", "PRE 3").'],
-      ['4. Producto: usa el código de la hoja Productos (ej. 00743). En la hoja Lista también puedes escribir la descripción exacta.'],
-      ['5. Cantidad en la unidad del producto (SC, KG, LT). Las celdas vacías o en 0 se ignoran.'],
-      ['6. En la app: Movimientos → "Subir plantilla" (o Ajustes → Subir plantilla de consumo). Revisa el resumen y toca "Registrar".'],
-      ['7. La app avisa de errores, de salidas que parecen repetidas y de productos que quedarían en negativo antes de guardar.']];
+      ['1. Llena la pestaña CONSUMO: una fila por producto y piscina. Solo se sube esa pestaña; las demás se ignoran.'],
+      ['2. FECHA: dd/mm/aaaa. Si la dejas vacía, se usa la fecha que elijas al subir el archivo.'],
+      ['3. PRODUCTO: código (ver pestaña Productos, ej. 00743). NOMBRE es solo referencia (se usa si falta el código).'],
+      ['4. CANTIDAD en la unidad del producto (SC, KG, LT). PISCINA: 01 a 20, 09B, PRE01 a PRE10.'],
+      ['5. Puedes usar filtros: solo se suben las filas visibles. Guarda el archivo con el filtro puesto.'],
+      ['6. En la app: Movimientos → "Subir plantilla". Revisa el resumen y toca "Registrar".']];
     const wb = XLSX.utils.book_new(), sh = (rows,w,n) => { const ws=XLSX.utils.aoa_to_sheet(rows); ws['!cols']=w.map(x=>({wch:x})); XLSX.utils.book_append_sheet(wb,ws,n); };
-    sh(mat, [12,10,...top.map(()=>22)], 'Por piscina'); sh(lista, [12,10,10,48,10], 'Lista'); sh(prod, [10,52,8,12], 'Productos'); sh(inst, [120], 'Instrucciones');
+    sh(cons, [12,11,48,11,10,16], 'CONSUMO'); sh(prod, [10,52,8,12], 'Productos'); sh(inst, [110], 'Instrucciones');
     XLSX.writeFile(wb, 'Plantilla_consumo_'+todayISO()+'.xlsx'); toast('Plantilla descargada');
   }).catch(e=>toast(e.message));
 }

@@ -179,8 +179,12 @@ function sUsers(a){ return (Array.isArray(a)?a:[]).map(x=>x&&typeof x==='object'
 function sMaster(s){   // inventario principal (lo escribe solo el administrador)
   if(!s||typeof s!=='object'||!Array.isArray(s.productos)) throw new Error('Archivo de datos no válido');
   return {v:3, productos:sProds(s.productos), entradas:sRecs(s.entradas), salidas:sRecs(s.salidas), conteo:sCount(s.conteo),
-    del:sMap(s.del,sNum), usuarios:sUsers(s.usuarios), conteoReset:sNum(s.conteoReset), admin:sMail(s.admin), gen:sStr(s.gen,40)};
+    del:sMap(s.del,sNum), usuarios:sUsers(s.usuarios), conteoReset:sNum(s.conteoReset), admin:sMail(s.admin), gen:sStr(s.gen,40), traspasos:sTras(s.traspasos)};
 }
+function sTras(a){ return (Array.isArray(a)?a:[]).filter(x=>x&&RX_ID.test(x.id)&&RX_DT.test(x.fecha)&&RX_DT.test(x.desde)&&RX_DT.test(x.hasta)).map(x=>({
+  id:x.id, fecha:x.fecha, origen:sStr(x.origen,40), desde:x.desde, hasta:x.hasta,
+  dest:(Array.isArray(x.dest)?x.dest:[]).map(d=>({doc:sStr(d&&d.doc,40), pct:Math.max(0,Math.min(100,sNum(d&&d.pct)))})).filter(d=>d.doc&&d.pct>0).slice(0,40),
+  nota:sStr(x.nota,200), u:sMail(x.u), ts:sNum(x.ts)})).filter(x=>x.origen&&x.dest.length); }
 function sReg(s){ s=(s&&typeof s==='object')?s:{}; return {entradas:sRecs(s.entradas), salidas:sRecs(s.salidas), conteo:sCount(s.conteo)}; }
 const uid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 /* Piscinas (PSC) y precrías (PRE): mismo formato que la hoja Salidas */
@@ -204,7 +208,7 @@ function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('sh
    D.regs   : copia local de los archivos de los demás usuarios
    S        : vista combinada que usa la interfaz (se recalcula con derive())        */
 const KEY = 'inv_gambirasi_v3', KEY_OD = 'inv_gambirasi_od';
-function emptyMaster(){ return {v:3, productos:[], entradas:[], salidas:[], conteo:{}, del:{}, usuarios:[], conteoReset:0, admin:'', gen:''}; }
+function emptyMaster(){ return {v:3, productos:[], entradas:[], salidas:[], conteo:{}, del:{}, usuarios:[], conteoReset:0, admin:'', gen:'', traspasos:[]}; }
 function emptyD(){ return {master:emptyMaster(), mine:sReg({}), regs:{}, etags:{}, owner:'', dirtyMaster:false, dirtyMine:false, forceMaster:false, rev:0, updated:'', syncedAt:0}; }
 function loadD(){
   try{ const r=localStorage.getItem(KEY); if(r){ const j=JSON.parse(r), d=emptyD();
@@ -239,7 +243,7 @@ function derive(){
   Object.keys(D.regs).forEach(f=>{ const owner=fileOwner(f); if(!owner) return;      // solo cuentan archivos de usuarios dados de alta
     const pre=f.slice(0,-5), r=D.regs[f]; add(ent,r.entradas,owner,pre); add(sal,r.salidas,owner,pre); addC(r.conteo,owner); });
   const conteo={}; Object.keys(ci).forEach(k=>{ if(ci[k].v!==null) conteo[k]=ci[k].v; });
-  S = {productos:m.productos, entradas:ent, salidas:sal, conteo, conteoInfo:ci, usuarios:m.usuarios};
+  S = {productos:m.productos, entradas:ent, salidas:sal, conteo, conteoInfo:ci, usuarios:m.usuarios, traspasos:(m.traspasos||[]).filter(x=>!del[x.id])};
 }
 derive();
 function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(D)); }catch(e){} }
@@ -336,6 +340,7 @@ function vHome(){
     <button class="btn in" onclick="openMove('e')">${IC.down} Entrada</button>
     <button class="btn out" onclick="openMove('s')">${IC.up} Salida</button>
   </div>
+  <button class="btn ghost full" style="margin-top:10px" onclick="openCP()">Consumo por piscina y traspasos</button>
   <div class="sec"><h2>Requieren atención</h2><button class="link" onclick="ui.filt='agot';go('prod')">Ver todos</button></div>
   <div class="card list">${attn.length ? attn.map(prodItem).join('') : '<div class="empty">Todo en orden. No hay productos agotados.</div>'}</div>
   <div class="sec"><h2>Últimos movimientos</h2><button class="link" onclick="go('mov')">Ver todos</button></div>
@@ -440,7 +445,7 @@ function vMov(){
   let html='', cur='';
   rows.slice(0,ui.mlimit).forEach(m=>{ if(m.f!==cur){ cur=m.f; html += `<div class="date-h">${fdate(cur)}</div>`; } html += `<div class="card list" style="margin-bottom:6px">${movItem(m)}</div>`; });
   return `
-  <div class="top"><div><h1>Movimientos</h1><small>${rows.length} registros</small></div><button class="btn ghost" style="min-height:42px;padding:8px 14px" onclick="openCarga()">Subir plantilla</button></div>
+  <div class="top"><div><h1>Movimientos</h1><small>${rows.length} registros</small></div><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn ghost" style="min-height:42px;padding:8px 14px" onclick="openCP()">Por piscina</button><button class="btn ghost" style="min-height:42px;padding:8px 14px" onclick="openCarga()">Subir plantilla</button></div></div>
   <div class="seg"><button class="${ui.mtipo==='e'?'on':''}" onclick="ui.mtipo='e';ui.mlimit=80;render()">Entradas</button><button class="${ui.mtipo==='s'?'on':''}" onclick="ui.mtipo='s';ui.mlimit=80;render()">Salidas</button></div>
   <div class="search"><input type="search" placeholder="Producto, código o documento" value="${esc(ui.mq)}" onchange="ui.mq=this.value;ui.mlimit=80;render()">
     <div class="row" style="margin-top:8px"><div class="field" style="margin:0"><label>Desde</label><input type="date" value="${esc(ui.mdesde)}" onchange="ui.mdesde=this.value;render()"></div>
@@ -647,7 +652,7 @@ $('#filex').addEventListener('change', async ev=>{
       if(!isAdmin()) return toast('Solo el administrador puede importar');
       const j = sMaster(JSON.parse(await f.text()));
       if(!confirm('Esto REEMPLAZA el inventario principal en todos los equipos. ¿Continuar?')) return;
-      D.master = Object.assign(j, {usuarios:D.master.usuarios, admin:D.master.admin||me(), gen:uid()}); D.forceMaster=true; save('master'); render(); return toast('Copia restaurada');
+      D.master = Object.assign(j, {usuarios:D.master.usuarios, admin:D.master.admin||me(), gen:uid(), traspasos:j.traspasos.length?j.traspasos:(D.master.traspasos||[])}); D.forceMaster=true; save('master'); render(); return toast('Copia restaurada');
     }
     await loadXLSX();
     const wb = XLSX.read(await f.arrayBuffer(), {type:'array'});
@@ -682,8 +687,138 @@ function importWorkbook(wb){
       if(!c || !seen.has(c)) return; out.push({id:uid(), doc:clean(r[0]), f, c, q, ts:Date.now(), u:me()}); }); return out; };
   const entradas = mov('Entradas'), salidas = mov('Salidas');
   if(!confirm('Se importarán '+productos.length+' productos, '+entradas.length+' entradas y '+salidas.length+' salidas y REEMPLAZARÁN el inventario principal en todos los equipos. ¿Continuar?')) return {p:0,e:0,s:0};
-  D.master = Object.assign(emptyMaster(), {productos, entradas, salidas, usuarios:D.master.usuarios, admin:D.master.admin||me(), gen:uid()}); D.forceMaster=true; save('master');
+  D.master = Object.assign(emptyMaster(), {productos, entradas, salidas, usuarios:D.master.usuarios, admin:D.master.admin||me(), gen:uid(), traspasos:D.master.traspasos||[]}); D.forceMaster=true; save('master');
   return {p:productos.length, e:entradas.length, s:salidas.length};
+}
+
+/* ---------- consumo por piscina y traspasos (no afectan el inventario) ----------
+   Un traspaso reasigna a otras piscinas lo que consumió un origen (ej. PRE01) entre "desde" y "hasta".
+   En un reporte [rd, rh] el traspaso se aplica si su fecha es <= rh: antes de esa fecha el consumo
+   aparece en el origen; después, en los destinos (marcado como "recibido de ..."). */
+const docOrder = d => { const i=PSC.indexOf(d), j=PRE.indexOf(d); return i>=0 ? i : j>=0 ? 100+j : 1000; };
+const docSort = (a,b) => docOrder(a)-docOrder(b) || String(a).localeCompare(String(b));
+const esBal = c => /BALANCEADO/i.test(pName(c));
+function consumoDestinos(rd, rh, filtro){
+  const okP = c => filtro==='bal' ? esBal(c) : filtro==='ins' ? !esBal(c) : true;
+  let E = S.salidas.filter(m=>m.f>=rd && m.f<=rh && m.doc && okP(m.c)).map(m=>({doc:m.doc, c:m.c, f:m.f, q:m.q, via:''}));
+  const out = {}, aplic = [];
+  S.traspasos.filter(x=>x.fecha<=rh).sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.ts-b.ts).forEach(x=>{
+    const tot = x.dest.reduce((a,d)=>a+d.pct,0); if(!tot) return;
+    const keep = []; let movido = 0;
+    E.forEach(e=>{
+      if(e.doc===x.origen && e.f>=x.desde && e.f<=x.hasta){
+        movido += e.q; (out[x.origen]=out[x.origen]||{})[e.c] = (out[x.origen][e.c]||0) + e.q;
+        x.dest.forEach(d=>keep.push({doc:d.doc, c:e.c, f:e.f, q:e.q*d.pct/tot, via: e.via ? e.via+' → '+x.origen : x.origen}));
+      } else keep.push(e);
+    });
+    E = keep; if(movido) aplic.push(x.id);
+  });
+  const R = {}, get = d => R[d] = R[d] || {doc:d, dir:{}, rec:{}, out:{}, from:{}};
+  E.forEach(e=>{ const r=get(e.doc), b=e.via?r.rec:r.dir; b[e.c]=(b[e.c]||0)+e.q; if(e.via){ const k=e.via; (r.from[k]=r.from[k]||{})[e.c]=(r.from[k][e.c]||0)+e.q; } });
+  Object.keys(out).forEach(d=>{ get(d).out = out[d]; });
+  return {R, aplic};
+}
+const sumMap = o => Object.values(o||{}).reduce((a,b)=>a+b,0);
+function porUnidad(o){ const u={}; Object.entries(o||{}).forEach(([c,q])=>{ const k=pUnit(c)||'UND'; u[k]=(u[k]||0)+q; });
+  const s = Object.entries(u).filter(([k,q])=>Math.abs(q)>1e-9).map(([k,q])=>fmt(Math.round(q*100)/100)+' '+k).join(' · '); return s || '—'; }
+const addMaps = (...ms) => { const r={}; ms.forEach(m=>Object.entries(m||{}).forEach(([c,q])=>r[c]=(r[c]||0)+q)); return r; };
+function firstOfMonth(){ const d=todayISO(); return d.slice(0,8)+'01'; }
+ui.cp = ui.cp || {desde:firstOfMonth(), hasta:todayISO(), filtro:'todos', sel:''};
+function openCP(){ showCP(); }
+function cpSet(k,v){ ui.cp[k]=v; showCP(); }
+function showCP(){
+  const c = ui.cp, {R, aplic} = consumoDestinos(c.desde, c.hasta, c.filtro);
+  const docs = Object.keys(R).sort(docSort);
+  const totDir = addMaps(...docs.map(d=>R[d].dir)), totAll = addMaps(...docs.map(d=>addMaps(R[d].dir,R[d].rec)));
+  const sel = c.sel && R[c.sel] ? R[c.sel] : null;
+  const trs = S.traspasos.slice().sort((a,b)=>b.fecha.localeCompare(a.fecha)||b.ts-a.ts);
+  openSheet(`<h2>Consumo por piscina y precría</h2>
+    <div style="color:var(--muted);font-size:14px">Consumo acumulado de cada destino. Los traspasos reasignan consumo entre piscinas <b>sin afectar el inventario</b>.</div>
+    <div class="row" style="margin-top:10px"><div class="field"><label>Desde</label><input type="date" value="${esc(c.desde)}" onchange="cpSet('desde',this.value)"></div>
+      <div class="field"><label>Hasta</label><input type="date" value="${esc(c.hasta)}" onchange="cpSet('hasta',this.value)"></div></div>
+    <div class="seg" style="margin:4px 0 10px;grid-template-columns:1fr 1fr 1fr">${[['todos','Todo'],['bal','Balanceado'],['ins','Insumos']].map(([k,l])=>`<button class="${c.filtro===k?'on':''}" onclick="cpSet('filtro','${k}')">${l}</button>`).join('')}</div>
+    <div class="info" style="margin:0 0 8px">Total consumido en el período: <b>${esc(porUnidad(totAll))}</b>${aplic.length?` · ${aplic.length} traspaso(s) aplicado(s)`:''}</div>
+    <div class="tblwrap" style="max-height:420px"><table class="tbl"><tr><th>Destino</th><th class="n">Consumo directo</th><th class="n">Recibido</th><th class="n">Transferido</th><th class="n">Acumulado</th></tr>
+      ${docs.map(d=>{ const r=R[d]; const acum=addMaps(r.dir,r.rec); return `<tr style="cursor:pointer;${c.sel===d?'background:var(--brand-soft)':''}" onclick="cpSet('sel',${jsa(c.sel===d?'':d)})">
+        <td><b>${esc(docLab(d)||d)}</b></td><td class="n">${esc(porUnidad(r.dir))}</td><td class="n">${sumMap(r.rec)?esc(porUnidad(r.rec)):'—'}</td>
+        <td class="n">${sumMap(r.out)?'−'+esc(porUnidad(r.out)):'—'}</td><td class="n"><b>${esc(porUnidad(acum))}</b></td></tr>`; }).join('') || '<tr><td colspan="5" class="empty">Sin consumos en el período.</td></tr>'}</table></div>
+    <p style="font-size:12px;color:var(--muted);margin:6px 0">Toca un destino para ver el detalle por producto. Acumulado = consumo directo + recibido por traspasos (lo transferido ya no se cuenta en el origen).</p>
+    ${sel?cpDetalle(sel):''}
+    <h3 style="font-size:15px;margin-top:12px">Traspasos registrados (${trs.length})</h3>
+    <div class="tblwrap"><table class="tbl"><tr><th>Fecha</th><th>Origen → destinos</th><th>Consumo del período</th><th>Por</th><th></th></tr>
+      ${trs.map(x=>`<tr><td>${esc(fdate(x.fecha))}</td><td><b>${esc(docLab(x.origen)||x.origen)}</b> → ${x.dest.map(d=>esc(docLab(d.doc)||d.doc)+' ('+fmt(Math.round(d.pct*100)/100)+'%)').join(', ')}${x.nota?'<br><span style="color:var(--muted)">'+esc(x.nota)+'</span>':''}</td>
+        <td>${esc(fdate(x.desde))} a ${esc(fdate(x.hasta))}</td><td>${esc(userName(x.u))}</td>
+        <td>${isAdmin()?`<button class="btn danger" style="min-height:32px;padding:4px 10px;font-size:13px" onclick="delTras(${jsa(x.id)})">Eliminar</button>`:''}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">Aún no hay traspasos.</td></tr>'}</table></div>
+    <div class="actions" style="margin-top:12px">${isAdmin()?'<button class="btn primary" onclick="openTras()">Nuevo traspaso</button>':'<span></span>'}<button class="btn ghost" onclick="exportCP()">Exportar a Excel</button></div>
+    <div class="actions"><button class="btn ghost" onclick="closeSheet()" style="grid-column:1/-1">Cerrar</button></div>`);
+  $('#sheet').classList.add('wide');
+}
+function cpDetalle(r){
+  const prods = [...new Set([...Object.keys(r.dir),...Object.keys(r.rec),...Object.keys(r.out)])].sort((a,b)=>pName(a).localeCompare(pName(b),'es'));
+  return `<h3 style="font-size:15px;margin-top:10px">Detalle: ${esc(docLab(r.doc)||r.doc)}</h3>
+    <div class="tblwrap"><table class="tbl"><tr><th>Producto</th><th class="n">Directo</th><th class="n">Recibido</th><th class="n">Transferido</th><th class="n">Acumulado</th></tr>
+    ${prods.map(cd=>{ const a=(r.dir[cd]||0)+(r.rec[cd]||0), u=' '+esc(pUnit(cd)), f=v=>v?fmt(Math.round(v*100)/100)+u:'—'; return `<tr><td>${esc(pName(cd))}<br><span style="color:var(--muted)">${esc(cd)}</span></td><td class="n">${f(r.dir[cd])}</td><td class="n">${f(r.rec[cd])}</td><td class="n">${r.out[cd]?'−'+f(r.out[cd]):'—'}</td><td class="n"><b>${f(a)}</b></td></tr>`; }).join('')}</table></div>
+    ${Object.keys(r.from).length?`<p style="font-size:13px;color:var(--muted)">Recibido de: ${Object.entries(r.from).map(([k,m])=>'<b>'+esc(k.split(' → ').map(x=>docLab(x)||x).join(' → '))+'</b> ('+esc(porUnidad(m))+')').join(' · ')}</p>`:''}`;
+}
+let tras = null;
+function openTras(origen){
+  if(!needAdmin()) return;
+  const c = ui.cp; tras = {origen: origen||'PRE01', desde:c.desde, hasta:c.hasta, fecha:c.hasta, dest:[], pct:{}, nota:''};
+  showTras();
+}
+function trasSet(k,v){ tras[k]=v; if(k==='hasta' && tras.fecha<v) tras.fecha=v; showTras(); }
+function trasDest(d){ const i=tras.dest.indexOf(d); if(i>=0) tras.dest.splice(i,1); else if(d!==tras.origen) tras.dest.push(d); tras.dest.sort(docSort); tras.pct={}; showTras(); }
+function trasPct(d,v){ tras.pct[d]=v; const el=$('#tsum'); if(el){ const s=trasPcts().reduce((a,x)=>a+x.pct,0); el.textContent='Suma: '+fmt(Math.round(s*100)/100)+'%'; el.className='pill '+(Math.abs(s-100)<0.05?'ok':'bad'); } }
+function trasPcts(){ const n=tras.dest.length; return tras.dest.map(d=>({doc:d, pct: tras.pct[d]!==undefined && tras.pct[d]!=='' ? (+tras.pct[d]||0) : 100/n})); }
+function showTras(){
+  const x = tras, base = consumoDestinos(x.desde, x.hasta, 'todos').R[x.origen], cons = base ? addMaps(base.dir, base.rec) : {};
+  const pcts = trasPcts(), suma = pcts.reduce((a,p)=>a+p.pct,0), ch = (d,on,fn) => `<button class="chip ${on?'on':''}" onclick="${fn}(${jsa(d)})">${esc(d)}</button>`;
+  const otros = [...new Set(S.salidas.map(m=>m.doc).filter(d=>d && !PSC.includes(d) && !PRE.includes(d)))].slice(0,30);
+  openSheet(`<h2>Nuevo traspaso de consumo</h2>
+    <div style="color:var(--muted);font-size:14px">Reasigna lo que consumió el origen en el período a las piscinas de destino. <b>No cambia el stock.</b></div>
+    <div class="field" style="margin-top:10px"><label>Origen (de dónde se pasan los animales)</label>
+      <select onchange="tras.dest=tras.dest.filter(d=>d!==this.value);trasSet('origen',this.value)">${[...PRE,...PSC,...otros].map(d=>`<option value="${esc(d)}" ${d===x.origen?'selected':''}>${esc(docLab(d)||d)}</option>`).join('')}</select></div>
+    <div class="row"><div class="field"><label>Consumo desde</label><input type="date" value="${esc(x.desde)}" onchange="trasSet('desde',this.value)"></div>
+      <div class="field"><label>Consumo hasta</label><input type="date" value="${esc(x.hasta)}" onchange="trasSet('hasta',this.value)"></div></div>
+    <div class="field"><label>Fecha del traspaso (desde este día el consumo aparece en los destinos)</label><input type="date" value="${esc(x.fecha)}" min="${esc(x.desde)}" onchange="trasSet('fecha',this.value)"></div>
+    <div class="info" style="margin:6px 0">Consumo de <b>${esc(docLab(x.origen)||x.origen)}</b> en el período: <b>${esc(porUnidad(cons))}</b>${sumMap(cons)?'':' (no hay salidas registradas en esas fechas)'}</div>
+    <label>Destinos</label><div class="chipgrid">${PSC.filter(d=>d!==x.origen).map(d=>ch(d,x.dest.includes(d),'trasDest')).join('')}</div>
+    <div class="chipgrid" style="margin-top:6px">${PRE.filter(d=>d!==x.origen).map(d=>ch(d,x.dest.includes(d),'trasDest')).join('')}</div>
+    ${pcts.length?`<div class="tblwrap" style="margin-top:10px"><table class="tbl"><tr><th>Destino</th><th class="n">% del consumo</th><th class="n">Recibe</th></tr>
+      ${pcts.map(p=>`<tr><td>${esc(docLab(p.doc)||p.doc)}</td><td class="n"><input type="number" min="0" max="100" step="any" style="width:90px;text-align:right" value="${esc(Math.round(p.pct*100)/100)}" oninput="trasPct(${jsa(p.doc)},this.value)" onchange="showTras()"></td>
+        <td class="n">${esc(porUnidad(Object.fromEntries(Object.entries(cons).map(([c,q])=>[c,q*p.pct/100]))))}</td></tr>`).join('')}</table></div>
+      <span id="tsum" class="pill ${Math.abs(suma-100)<0.05?'ok':'bad'}">Suma: ${fmt(Math.round(suma*100)/100)}%</span>
+      <span style="font-size:12px;color:var(--muted);margin-left:6px">Por defecto se reparte en partes iguales; puedes cambiar los porcentajes (deben sumar 100%).</span>`:''}
+    <div class="field" style="margin-top:10px"><label>Nota (opcional)</label><input maxlength="200" value="${esc(x.nota)}" oninput="tras.nota=this.value" placeholder="Ej. transferencia de larvas, lote 12"></div>
+    <div class="actions"><button class="btn ghost" onclick="showCP()">Cancelar</button><button class="btn primary" onclick="saveTras()">Guardar traspaso</button></div>`);
+  $('#sheet').classList.add('wide');
+}
+function saveTras(){
+  if(!needAdmin()) return; const x = tras, p = trasPcts(), s = p.reduce((a,v)=>a+v.pct,0);
+  if(!x.dest.length) return toast('Elige al menos una piscina de destino');
+  if(x.desde>x.hasta) return toast('La fecha "desde" debe ser anterior a "hasta"');
+  if(x.fecha<x.desde) return toast('La fecha del traspaso no puede ser anterior al inicio del período');
+  if(Math.abs(s-100)>=0.05) return toast('Los porcentajes deben sumar 100%');
+  D.master.traspasos = D.master.traspasos || [];
+  D.master.traspasos.push({id:uid(), fecha:x.fecha, origen:x.origen, desde:x.desde, hasta:x.hasta, dest:p.map(v=>({doc:v.doc, pct:v.pct})), nota:sStr(x.nota.trim(),200), u:me(), ts:Date.now()});
+  save('master'); tras=null; ui.cp.sel=''; showCP(); toast('Traspaso guardado (el inventario no cambia)');
+}
+function delTras(id){
+  if(!needAdmin()) return; if(!confirm('¿Eliminar este traspaso? El consumo vuelve a contarse en el origen.')) return;
+  D.master.del[id]=Date.now(); D.master.traspasos=(D.master.traspasos||[]).filter(x=>x.id!==id); save('master'); showCP(); toast('Traspaso eliminado');
+}
+async function exportCP(){
+  try{ await loadXLSX(); const c=ui.cp, {R}=consumoDestinos(c.desde,c.hasta,c.filtro), docs=Object.keys(R).sort(docSort);
+    const rows=[['CONSUMO POR PISCINA / PRECRÍA'],['Desde',c.desde,'Hasta',c.hasta,'Filtro',{todos:'Todo',bal:'Balanceado',ins:'Insumos'}[c.filtro]],[],
+      ['Destino','Código','Producto','Medida','Consumo directo','Recibido por traspaso','Transferido a otras','Acumulado']];
+    docs.forEach(d=>{ const r=R[d]; [...new Set([...Object.keys(r.dir),...Object.keys(r.rec),...Object.keys(r.out)])].sort((a,b)=>pName(a).localeCompare(pName(b),'es')).forEach(cd=>{
+      const rd=x=>Math.round((x||0)*100)/100; rows.push([docLab(d)||d, cd, pName(cd), pUnit(cd), rd(r.dir[cd]), rd(r.rec[cd]), rd(r.out[cd]), rd((r.dir[cd]||0)+(r.rec[cd]||0))]); }); });
+    const tr=[['Fecha traspaso','Origen','Consumo desde','Consumo hasta','Destinos (%)','Nota','Registrado por']];
+    S.traspasos.slice().sort((a,b)=>a.fecha.localeCompare(b.fecha)).forEach(x=>tr.push([x.fecha, docLab(x.origen)||x.origen, x.desde, x.hasta, x.dest.map(d=>(docLab(d.doc)||d.doc)+' '+(Math.round(d.pct*100)/100)+'%').join(', '), x.nota, userName(x.u)]));
+    const wb=XLSX.utils.book_new(), sh=(r,w,n)=>{ const ws=XLSX.utils.aoa_to_sheet(r); ws['!cols']=w.map(x=>({wch:x})); XLSX.utils.book_append_sheet(wb,ws,n); };
+    sh(rows,[14,10,48,8,15,18,18,12],'Por piscina'); sh(tr,[14,12,13,13,50,30,20],'Traspasos');
+    XLSX.writeFile(wb,'Consumo_por_piscina_'+c.desde+'_a_'+c.hasta+'.xlsx'); toast('Excel generado');
+  }catch(e){ toast(e.message); }
 }
 
 /* ---------- carga masiva de consumo (salidas desde plantilla Excel) ---------- */
@@ -934,7 +1069,7 @@ function mergeMaster(L,R){
   const reset=Math.max(L.conteoReset||0,R.conteoReset||0), cnt=mergeCount(L.conteo,R.conteo);
   Object.keys(cnt).forEach(k=>{ if(cnt[k].ts<reset) delete cnt[k]; });
   return {v:3, productos:[...pm.values()], entradas:byId(L.entradas,R.entradas,del), salidas:byId(L.salidas,R.salidas,del), conteo:cnt, del,
-    usuarios:[...um.values()], conteoReset:reset, admin:L.admin||R.admin, gen:L.gen||R.gen||''};
+    usuarios:[...um.values()], conteoReset:reset, admin:L.admin||R.admin, gen:L.gen||R.gen||'', traspasos:byId(L.traspasos,R.traspasos,del)};
 }
 async function readJSON(path){ const r = await graph(path, {raw:true}); return r ? r.json() : null; }
 function rebaseOn(R){
@@ -942,7 +1077,7 @@ function rebaseOn(R){
   const since = D.syncedAt || od().last || 0, L = D.master, nw = x => (x.ets||x.ts||0) > since;
   const pend = {productos:L.productos.filter(p=>(p.ts||0)>since), entradas:L.entradas.filter(nw), salidas:L.salidas.filter(nw),
     conteo:Object.fromEntries(Object.entries(L.conteo).filter(([k,x])=>x.ts>since)), del:Object.fromEntries(Object.entries(L.del).filter(([k,v])=>v>since)),
-    usuarios:L.usuarios.filter(u=>u.ts>since), conteoReset:0, admin:L.admin, gen:R.gen};
+    usuarios:L.usuarios.filter(u=>u.ts>since), conteoReset:0, admin:L.admin, gen:R.gen, traspasos:(L.traspasos||[]).filter(nw)};
   return mergeMaster(pend, R);
 }
 async function syncMaster(admin){

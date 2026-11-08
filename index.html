@@ -580,6 +580,7 @@ function vSet(){
         ${on?`<label style="display:flex;gap:10px;align-items:center;font-size:14px"><input type="checkbox" ${o.remember!==false?'checked':''} onchange="odSet({remember:this.checked});toast(this.checked?'Sesión recordada en este dispositivo':'La sesión se cerrará al cerrar la app')"> Recordarme en este dispositivo</label>
         <button class="btn danger" onclick="odLogout()">Cerrar sesión</button>`:''}
       </div>
+      ${on&&!adm&&curScope()!==SCOPE_ALL?'<div class="info bad" style="margin-top:10px">Aún no tienes acceso a la carpeta compartida.'+(o.needApproval?' Microsoft indica que falta la aprobación del administrador de sistemas de la empresa.':'')+'</div><button class="btn primary full" style="margin-top:8px" onclick="requestShared()">Solicitar acceso</button>':''}
       ${o.last?'<p style="font-size:13px;color:var(--muted);margin-top:8px">Última sincronización: '+esc(fdt(o.last))+'</p>':''}</div>
     ${adm?usersBlock(btn):''}
     <div class="set-block"><h3>Excel</h3>
@@ -680,7 +681,9 @@ function importWorkbook(wb){
 
 /* ---------- OneDrive (Microsoft Graph + OAuth2 PKCE, sin librerías) ---------- */
 const AUTH = 'https://login.microsoftonline.com/'+ONEDRIVE_TENANT+'/oauth2/v2.0';
-const SCOPE = 'Files.ReadWrite.All User.Read offline_access';   // necesario para trabajar sobre la carpeta compartida del administrador
+const SCOPE_BASE = 'Files.ReadWrite.AppFolder User.Read offline_access';   // administrador: solo la carpeta de la app en su OneDrive
+const SCOPE_ALL  = 'Files.ReadWrite.All User.Read offline_access';         // usuarios: acceso a la carpeta compartida del administrador
+const curScope = () => od().scope || SCOPE_BASE;
 const rnd = n => { const a=new Uint8Array(n); crypto.getRandomValues(a); return btoa(String.fromCharCode(...a)).replace(/[^A-Za-z0-9]/g,'').slice(0,n); };
 const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 const odRemember = () => od().remember !== false;
@@ -689,8 +692,9 @@ async function odStart(x){
   if(!(window.crypto && crypto.subtle)) return toast('OneDrive requiere abrir la app por HTTPS. Mientras tanto usa Importar/Exportar Excel.');
   const verifier = rnd(64), state = rnd(16);
   const challenge = b64u(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
-  localStorage.setItem('inv_pkce', JSON.stringify({verifier,state,silent:!!x.silent}));
-  const prm = {client_id:x.clientId, response_type:'code', redirect_uri:x.redirectUri, response_mode:'query', scope:SCOPE, state, code_challenge:challenge, code_challenge_method:'S256'};
+  const scope = x.scope || curScope();
+  localStorage.setItem('inv_pkce', JSON.stringify({verifier,state,silent:!!x.silent,scope}));
+  const prm = {client_id:x.clientId, response_type:'code', redirect_uri:x.redirectUri, response_mode:'query', scope, state, code_challenge:challenge, code_challenge_method:'S256'};
   if(x.silent){ prm.prompt='none'; if(x.hint) prm.login_hint=x.hint; } else prm.prompt='select_account';
   const u = new URL(AUTH+'/authorize'); Object.entries(prm).forEach(([k,v])=>u.searchParams.set(k,v));
   location.href = u.toString();
@@ -711,17 +715,19 @@ async function odHandleRedirect(){
   localStorage.removeItem('inv_pkce');
   if(q.get('error')){
     if(p.silent){ odSet({token:'',refresh:'',exp:0}); return; }   // la sesión de Microsoft venció: se pedirá iniciar sesión
-    return toast('OneDrive: '+(q.get('error_description')||q.get('error')));
+    if(p.scope===SCOPE_ALL){ odSet({needApproval:true}); return toast('Falta la aprobación del administrador de sistemas para acceder a la carpeta compartida (ver manual).'); }
+    return toast('Microsoft: '+(q.get('error_description')||q.get('error')));
   }
   if(q.get('state')!==p.state) return toast('Respuesta no válida de Microsoft');
   const o = od();
   try{
-    const t = await odToken({client_id:o.clientId, grant_type:'authorization_code', code:q.get('code'), redirect_uri:o.redirectUri, code_verifier:p.verifier, scope:SCOPE});
-    odSet({token:t.access_token, refresh:t.refresh_token, exp:Date.now()+t.expires_in*1000-60000});
+    const t = await odToken({client_id:o.clientId, grant_type:'authorization_code', code:q.get('code'), redirect_uri:o.redirectUri, code_verifier:p.verifier, scope:p.scope||curScope()});
+    odSet({token:t.access_token, refresh:t.refresh_token, exp:Date.now()+t.expires_in*1000-60000, scope:p.scope||curScope(), needApproval: p.scope===SCOPE_ALL ? false : od().needApproval});
     try{ sessionStorage.setItem('inv_session','1'); sessionStorage.removeItem('inv_silent'); }catch(e){}
     try{ const u = await graph('/me?$select=mail,userPrincipalName,displayName'); const email = sMail(u.mail)||sMail(u.userPrincipalName);
       if(D.owner && D.owner!==email){ D.mine=sReg({}); D.dirtyMine=false; D.regs={}; D.etags={}; }   // otra persona en este equipo: no se mezclan registros
-      D.owner = email; odSet({user: email, name: sStr(u.displayName,80), role:''}); await detectRole(); derive(); persist(); }catch(e){}
+      D.owner = email; odSet({user: email, name: sStr(u.displayName,80), role:''}); await detectRole(); derive(); persist();
+      if(!isAdmin() && curScope()!==SCOPE_ALL && !p.silent){ return requestShared(); } }catch(e){}
     if(!p.silent){ view='home'; toast('Sesión iniciada'); }
   }catch(e){ toast(e.message); }
 }
@@ -729,7 +735,7 @@ async function accessToken(){
   const o = od(); if(!o.token) throw new Error('Inicia sesión con OneDrive');
   if(Date.now() < o.exp) return o.token;
   try{
-    const t = await odToken({client_id:o.clientId, grant_type:'refresh_token', refresh_token:o.refresh, scope:SCOPE});
+    const t = await odToken({client_id:o.clientId, grant_type:'refresh_token', refresh_token:o.refresh, scope:curScope()});
     odSet({token:t.access_token, refresh:t.refresh_token||o.refresh, exp:Date.now()+t.expires_in*1000-60000}); return t.access_token;
   }catch(e){
     if(e instanceof TypeError || !navigator.onLine) throw new Error('Sin conexión');   // no se borra la sesión por falta de internet
@@ -764,6 +770,9 @@ const enc = p => p.split('/').map(encodeURIComponent).join('/');
 const ip = p => '/drives/'+SHARED.drive+'/items/'+SHARED.folder+':/'+enc(p);          // ruta dentro de la carpeta compartida
 const itemUrl = id => '/drives/'+SHARED.drive+'/items/'+id;
 const J = {'Content-Type':'application/json'};
+function requestShared(){   // pide a Microsoft el permiso para la carpeta compartida (la primera vez, o cuando sistemas lo aprueba)
+  const o = od(); odStart({clientId:o.clientId, redirectUri:o.redirectUri, scope:SCOPE_ALL, hint:o.user});
+}
 async function detectRole(){   // administrador = dueño de la carpeta compartida
   let role='operador'; try{ const d=await graph('/me/drive?$select=id'); if(d&&d.id===SHARED.drive) role='admin'; }catch(e){}
   odSet({role}); if(role==='admin' && !D.master.admin) D.master.admin=me(); return role;
@@ -799,7 +808,7 @@ async function syncMine(){
   const f = regKey(me());
   for(let i=0;i<3;i++){
     const meta = await graph(ip(REG_DIR+'/'+f));
-    if(!meta) throw new Error('Tu usuario aún no está habilitado. Pide al administrador que te agregue.');
+    if(!meta) throw new Error(curScope()!==SCOPE_ALL ? 'Falta aprobar el acceso a la carpeta compartida. Ve a Ajustes → "Solicitar acceso".' : 'Tu usuario aún no está habilitado. Pide al administrador que te agregue.');
     const R = sReg(await readJSON(itemUrl(meta.id)+'/content'));
     const M = {entradas:byId(D.mine.entradas,R.entradas), salidas:byId(D.mine.salidas,R.salidas), conteo:mergeCount(D.mine.conteo,R.conteo)};
     D.mine = M;

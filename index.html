@@ -335,12 +335,12 @@ function vHome(){
     <div class="card kpi tap warn" onclick="ui.filt='bajo';go('prod')"><b>${bajo.length}</b><span>Bajo mínimo</span></div>
     <div class="card kpi tap" onclick="go('mov')"><b>${eH+sH}</b><span>Movimientos hoy</span></div>
   </div>
-  ${S.productos.length?'':`<div class="card" style="padding:16px;margin:12px 0"><b>Sin datos en este equipo</b><p style="font-size:14px;color:var(--muted);margin:6px 0 10px">${od().token?'Toca el botón para traer el inventario. Si no aparece nada, pide al administrador que te agregue como usuario.':'Inicia sesión con tu correo para ver el inventario.'}</p><button class="btn primary full" onclick="${od().token?'odSync()':'odLogin()'}">${od().token?'Sincronizar':'Iniciar sesión'}</button></div>`}
+  ${S.productos.length?'':`<div class="card" style="padding:16px;margin:12px 0"><b>Sin datos en este equipo</b><p style="font-size:14px;color:var(--muted);margin:6px 0 10px">${!od().token?'Inicia sesión con tu correo para ver el inventario.':(!isAdmin()&&curScope()!==SCOPE_ALL)?'Tu usuario ya está creado, pero la empresa todavía no aprueba el acceso de la app a la carpeta compartida (lo hace el área de Sistemas una sola vez). Cuando lo aprueben, toca Ajustes → Solicitar acceso.':'Toca el botón para traer el inventario. Si no aparece nada, pide al administrador que te agregue como usuario.'}</p><button class="btn primary full" onclick="${od().token?'odSync()':'odLogin()'}">${od().token?'Sincronizar':'Iniciar sesión'}</button></div>`}
   <div class="actions">
     <button class="btn in" onclick="openMove('e')">${IC.down} Entrada</button>
     <button class="btn out" onclick="openMove('s')">${IC.up} Salida</button>
   </div>
-  <button class="btn ghost full" style="margin-top:10px" onclick="openCP()">Consumo por piscina y traspasos</button>
+  <div class="grid2" style="margin-top:10px"><button class="btn ghost" onclick="openRep()">Reportes (PDF)</button><button class="btn ghost" onclick="openCP()">Por piscina y traspasos</button></div>
   <div class="sec"><h2>Requieren atención</h2><button class="link" onclick="ui.filt='agot';go('prod')">Ver todos</button></div>
   <div class="card list">${attn.length ? attn.map(prodItem).join('') : '<div class="empty">Todo en orden. No hay productos agotados.</div>'}</div>
   <div class="sec"><h2>Últimos movimientos</h2><button class="link" onclick="go('mov')">Ver todos</button></div>
@@ -818,6 +818,114 @@ async function exportCP(){
     const wb=XLSX.utils.book_new(), sh=(r,w,n)=>{ const ws=XLSX.utils.aoa_to_sheet(r); ws['!cols']=w.map(x=>({wch:x})); XLSX.utils.book_append_sheet(wb,ws,n); };
     sh(rows,[14,10,48,8,15,18,18,12],'Por piscina'); sh(tr,[14,12,13,13,50,30,20],'Traspasos');
     XLSX.writeFile(wb,'Consumo_por_piscina_'+c.desde+'_a_'+c.hasta+'.xlsx'); toast('Excel generado');
+  }catch(e){ toast(e.message); }
+}
+
+/* ---------- reportes PDF (jsPDF alojado en la propia app) ---------- */
+function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=()=>res(); s.onerror=()=>rej(new Error('No se pudo cargar '+src+' (¿sin internet la primera vez?)')); document.head.appendChild(s); }); }
+async function loadPDF(){
+  if(!(window.jspdf && window.jspdf.jsPDF)) await loadScript('jspdf.umd.min.js');
+  if(!window.jspdf.jsPDF.API.autoTable) await loadScript('jspdf.plugin.autotable.min.js');
+  if(!window.jspdf.jsPDF.API.autoTable && window.jspdfAutoTable && window.jspdfAutoTable.applyPlugin) window.jspdfAutoTable.applyPlugin(window.jspdf.jsPDF);
+}
+const pdfTxt = s => String(s??'').replace(/[→]/g,'>').replace(/[−–—]/g,'-').replace(/[^\x20-\x7E\xA0-\xFF\n]/g,'');
+const n2 = v => fmt(Math.round((+v||0)*100)/100);
+async function pdfNew(titulo, sub){
+  await loadPDF();
+  const doc = new window.jspdf.jsPDF({unit:'pt', format:'a4'}), W = doc.internal.pageSize.getWidth();
+  doc.setFillColor(15,118,110); doc.rect(0,0,W,58,'F');
+  doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(16); doc.text(pdfTxt(titulo), 40, 30);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.text('GAMBIRASI - Bodega', 40, 46);
+  doc.setTextColor(60,72,70); doc.setFontSize(9.5);
+  const lines = [...(sub||[]), 'Generado por '+userName(me())+' ('+me()+') el '+fdt(Date.now())+(pending()?' - hay cambios de este equipo sin sincronizar':'')];
+  lines.forEach((l,i)=>doc.text(pdfTxt(l), 40, 78+i*13));
+  return {doc, y: 78+lines.length*13+6};
+}
+function pdfFin(doc, nombre){
+  const n = doc.getNumberOfPages(), W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+  for(let i=1;i<=n;i++){ doc.setPage(i); doc.setFontSize(8); doc.setTextColor(120,130,128);
+    doc.text('Inventario GAMBIRASI - '+pdfTxt(fdt(Date.now())), 40, H-20); doc.text('Página '+i+' de '+n, W-40, H-20, {align:'right'}); }
+  doc.save(nombre); toast('PDF descargado: '+nombre);
+}
+const tblStyle = {styles:{font:'helvetica', fontSize:8.5, cellPadding:4, textColor:[18,32,31]}, headStyles:{fillColor:[15,118,110], textColor:255, fontStyle:'bold'},
+  alternateRowStyles:{fillColor:[245,248,248]}, margin:{left:40, right:40, bottom:40}};
+async function pdfSaldos(){
+  try{
+    const m = calc(), rows = S.productos.map(p=>m.get(p.c)).filter(x=>x && x.stock>0).sort((a,b)=>a.p.d.localeCompare(b.p.d,'es'));
+    const {doc, y} = await pdfNew('Saldo disponible de productos', ['Productos con saldo mayor a cero al '+fdate(todayISO())+': '+rows.length+' de '+S.productos.length]);
+    doc.autoTable(Object.assign({}, tblStyle, {startY:y, head:[['N.','Código','Descripción','Unidad','Saldo']],
+      body: rows.map((x,i)=>[i+1, x.p.c, pdfTxt(x.p.d), x.p.u, n2(x.stock)]),
+      columnStyles:{0:{halign:'right',cellWidth:26},1:{cellWidth:52},3:{halign:'center',cellWidth:44},4:{halign:'right',cellWidth:70,fontStyle:'bold'}}}));
+    pdfFin(doc, 'Saldos_'+todayISO()+'.pdf');
+  }catch(e){ toast('Error: '+e.message); }
+}
+/* ----- consumo entre fechas, por producto o por piscina ----- */
+ui.rc = ui.rc || {desde:firstOfMonth(), hasta:todayISO(), por:'prod', filtro:'todos', doc:'', tras:true};
+const tipoOk = (c,f) => f==='bal' ? esBal(c) : f==='ins' ? !esBal(c) : true;
+const tipoLab = f => ({todos:'Todos los productos', bal:'Solo balanceado', ins:'Solo insumos'})[f];
+function consumoRep(c){
+  if(c.por==='prod'){
+    const mm = new Map();
+    S.salidas.filter(x=>x.f>=c.desde && x.f<=c.hasta && (!c.doc || x.doc===c.doc) && tipoOk(x.c,c.filtro)).forEach(x=>{ const r=mm.get(x.c)||{c:x.c,q:0,n:0}; r.q+=x.q; r.n++; mm.set(x.c,r); });
+    return {prods:[...mm.values()].sort((a,b)=>pName(a.c).localeCompare(pName(b.c),'es'))};
+  }
+  let per = {};
+  if(c.tras){ const {R} = consumoDestinos(c.desde, c.hasta, c.filtro); Object.keys(R).forEach(d=>{ const a=addMaps(R[d].dir,R[d].rec); if(sumMap(a)>1e-9) per[d]=a; }); }
+  else S.salidas.filter(x=>x.f>=c.desde && x.f<=c.hasta && x.doc && tipoOk(x.c,c.filtro)).forEach(x=>{ (per[x.doc]=per[x.doc]||{})[x.c]=(per[x.doc][x.c]||0)+x.q; });
+  return {docs:Object.keys(per).sort(docSort).map(d=>({doc:d, items:Object.entries(per[d]).filter(([k,q])=>q>1e-9).sort((a,b)=>pName(a[0]).localeCompare(pName(b[0]),'es'))}))};
+}
+function repSub(c){ return ['Del '+fdate(c.desde)+' al '+fdate(c.hasta)+' · '+tipoLab(c.filtro)+(c.por==='prod'&&c.doc?' · Solo '+(docLab(c.doc)||c.doc):'')+(c.por==='pisc'?(c.tras?' · Con traspasos aplicados':' · Sin traspasos (consumo directo)'):'')]; }
+function openRep(){ showRep(); }
+function rcSet(k,v){ ui.rc[k]=v; showRep(); }
+function showRep(){
+  const c = ui.rc, r = consumoRep(c), docsAll = [...new Set(S.salidas.map(m=>m.doc).filter(Boolean))].sort(docSort);
+  const m = calc(), conSaldo = S.productos.filter(p=>(m.get(p.c)||{}).stock>0).length;
+  let prev = '';
+  if(c.por==='prod') prev = `<table class="tbl"><tr><th>Producto</th><th class="n">Salidas</th><th class="n">Consumido</th></tr>${r.prods.map(x=>`<tr><td>${esc(pName(x.c))}<br><span style="color:var(--muted)">${esc(x.c)}</span></td><td class="n">${x.n}</td><td class="n"><b>${n2(x.q)} ${esc(pUnit(x.c))}</b></td></tr>`).join('')||'<tr><td colspan="3" class="empty">Sin consumos en el período.</td></tr>'}</table>`;
+  else prev = `<table class="tbl"><tr><th>Destino</th><th>Producto</th><th class="n">Consumido</th></tr>${r.docs.map(g=>g.items.map(([cd,q],i)=>`<tr>${i===0?`<td rowspan="${g.items.length}"><b>${esc(docLab(g.doc)||g.doc)}</b><br><span style="color:var(--muted)">${esc(porUnidad(Object.fromEntries(g.items)))}</span></td>`:''}<td>${esc(pName(cd))}</td><td class="n">${n2(q)} ${esc(pUnit(cd))}</td></tr>`).join('')).join('')||'<tr><td colspan="3" class="empty">Sin consumos en el período.</td></tr>'}</table>`;
+  openSheet(`<h2>Reportes</h2>
+    <div class="set-block" style="padding:10px 0"><h3 style="font-size:16px">Saldo disponible</h3>
+      <p style="font-size:14px;color:var(--muted)">Todos los productos con saldo mayor a cero (${conSaldo}), con código, descripción, unidad y saldo actual.</p>
+      <button class="btn primary full" onclick="pdfSaldos()">Descargar PDF de saldos</button></div>
+    <div class="set-block" style="padding:10px 0"><h3 style="font-size:16px">Consumo entre fechas</h3>
+      <div class="row"><div class="field"><label>Desde</label><input type="date" value="${esc(c.desde)}" onchange="rcSet('desde',this.value)"></div>
+        <div class="field"><label>Hasta</label><input type="date" value="${esc(c.hasta)}" onchange="rcSet('hasta',this.value)"></div></div>
+      <label>Agrupar por</label><div class="seg" style="margin:4px 0 8px">${[['prod','Producto'],['pisc','Piscina / precría']].map(([k,l])=>`<button class="${c.por===k?'on':''}" onclick="rcSet('por','${k}')">${l}</button>`).join('')}</div>
+      <div class="seg" style="margin:0 0 8px;grid-template-columns:1fr 1fr 1fr">${[['todos','Todo'],['bal','Balanceado'],['ins','Insumos']].map(([k,l])=>`<button class="${c.filtro===k?'on':''}" onclick="rcSet('filtro','${k}')">${l}</button>`).join('')}</div>
+      ${c.por==='prod'?`<div class="field"><label>Piscina / precría</label><select onchange="rcSet('doc',this.value)"><option value="">Todas</option>${docsAll.map(d=>`<option value="${esc(d)}" ${c.doc===d?'selected':''}>${esc(docLab(d)||d)}</option>`).join('')}</select></div>`
+        :`<label style="display:flex;gap:10px;align-items:center;font-size:14px;margin:4px 0 8px"><input type="checkbox" ${c.tras?'checked':''} onchange="rcSet('tras',this.checked)"> Aplicar traspasos entre piscinas (ver “Por piscina y traspasos”)</label>`}
+      <div class="tblwrap" style="max-height:360px">${prev}</div>
+      <div class="actions"><button class="btn primary" onclick="pdfConsumo()">Descargar PDF</button><button class="btn ghost" onclick="xlsConsumo()">Descargar Excel</button></div></div>
+    <div class="actions"><button class="btn ghost" onclick="closeSheet()" style="grid-column:1/-1">Cerrar</button></div>`);
+  $('#sheet').classList.add('wide');
+}
+async function pdfConsumo(){
+  try{
+    const c = ui.rc, r = consumoRep(c), {doc, y} = await pdfNew(c.por==='prod'?'Consumo por producto':'Consumo por piscina / precría', repSub(c));
+    if(c.por==='prod'){
+      doc.autoTable(Object.assign({}, tblStyle, {startY:y, head:[['Código','Descripción','Unidad','N. salidas','Consumido']],
+        body: r.prods.map(x=>[x.c, pdfTxt(pName(x.c)), pUnit(x.c), x.n, n2(x.q)]),
+        foot: [['','TOTAL', '', r.prods.reduce((a,x)=>a+x.n,0), pdfTxt(porUnidad(Object.fromEntries(r.prods.map(x=>[x.c,x.q]))))]],
+        footStyles:{fillColor:[217,240,236], textColor:[18,32,31], fontStyle:'bold'}, showFoot:'lastPage',
+        columnStyles:{0:{cellWidth:52},2:{halign:'center',cellWidth:44},3:{halign:'right',cellWidth:58},4:{halign:'right',cellWidth:90,fontStyle:'bold'}}}));
+    } else {
+      const body = [];
+      r.docs.forEach(g=>{ body.push([{content:pdfTxt((docLab(g.doc)||g.doc)+'   -   '+porUnidad(Object.fromEntries(g.items))), colSpan:4, styles:{fillColor:[217,240,236], fontStyle:'bold'}}]);
+        g.items.forEach(([cd,q])=>body.push([cd, pdfTxt(pName(cd)), pUnit(cd), n2(q)])); });
+      doc.autoTable(Object.assign({}, tblStyle, {startY:y, head:[['Código','Descripción','Unidad','Consumido']], body,
+        columnStyles:{0:{cellWidth:52},2:{halign:'center',cellWidth:44},3:{halign:'right',cellWidth:80,fontStyle:'bold'}}}));
+      const tot = {}; r.docs.forEach(g=>g.items.forEach(([cd,q])=>tot[cd]=(tot[cd]||0)+q));
+      doc.setFontSize(9.5); doc.setTextColor(18,32,31); doc.text(pdfTxt('Total general: '+porUnidad(tot)), 40, doc.lastAutoTable.finalY+18);
+    }
+    pdfFin(doc, (c.por==='prod'?'Consumo_por_producto_':'Consumo_por_piscina_')+c.desde+'_a_'+c.hasta+'.pdf');
+  }catch(e){ toast('Error: '+e.message); }
+}
+async function xlsConsumo(){
+  try{ await loadXLSX(); const c=ui.rc, r=consumoRep(c), rows=[[c.por==='prod'?'CONSUMO POR PRODUCTO':'CONSUMO POR PISCINA / PRECRÍA'],[repSub(c)[0]],[]];
+    if(c.por==='prod'){ rows.push(['Código','Descripción','Unidad','N. salidas','Consumido']); r.prods.forEach(x=>rows.push([x.c,pName(x.c),pUnit(x.c),x.n,Math.round(x.q*100)/100])); }
+    else { rows.push(['Destino','Código','Descripción','Unidad','Consumido']); r.docs.forEach(g=>g.items.forEach(([cd,q])=>rows.push([docLab(g.doc)||g.doc,cd,pName(cd),pUnit(cd),Math.round(q*100)/100]))); }
+    const wb=XLSX.utils.book_new(), ws=XLSX.utils.aoa_to_sheet(rows); ws['!cols']=[14,12,50,9,12].map(x=>({wch:x})); XLSX.utils.book_append_sheet(wb,ws,'Consumo');
+    XLSX.writeFile(wb,(c.por==='prod'?'Consumo_por_producto_':'Consumo_por_piscina_')+c.desde+'_a_'+c.hasta+'.xlsx'); toast('Excel generado');
   }catch(e){ toast(e.message); }
 }
 

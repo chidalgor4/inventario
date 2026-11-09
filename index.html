@@ -830,6 +830,26 @@ async function loadPDF(){
 }
 const pdfTxt = s => String(s??'').replace(/[→]/g,'>').replace(/[−–—]/g,'-').replace(/[^\x20-\x7E\xA0-\xFF\n]/g,'');
 const n2 = v => fmt(Math.round((+v||0)*100)/100);
+const q2 = v => (+v||0).toLocaleString('es-EC',{minimumFractionDigits:2, maximumFractionDigits:2});
+const medida = c => ({SC:'SACOS', KG:'KILOS', LT:'LITROS', UND:'UNIDADES', GL:'GALONES'})[pUnit(c)] || pUnit(c);
+let logoData = null;
+async function getLogo(){ if(logoData) return logoData; try{ const b = await (await fetch('logo.png')).blob();
+  logoData = await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(b); }); }catch(e){} return logoData; }
+async function pdfEmpresa(titulo, fechaTxt, sub){   // encabezado tipo "DESPACHO DE BODEGA" de GAMBIRASI SA
+  await loadPDF();
+  const doc = new window.jspdf.jsPDF({unit:'pt', format:'a4'}), W = doc.internal.pageSize.getWidth(), logo = await getLogo();
+  if(logo) doc.addImage(logo, 'PNG', 40, 26, 92, 65);
+  doc.setTextColor(0,0,0); doc.setFont('helvetica','bold'); doc.setFontSize(17); doc.text('GAMBIRASI SA', 145, 46);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.text('0992838086001', 145, 62); doc.text('AV. 25 DE JUNIO, KM 4.5 VIA A PASAJE', 145, 76);
+  doc.setFont('helvetica','bold'); doc.setFontSize(12.5); doc.text(pdfTxt(titulo), W/2, 120, {align:'center'});
+  doc.setFontSize(9.5); const fx = W-40; doc.setFillColor(255,244,214); const tw = doc.getTextWidth(pdfTxt(fechaTxt))+16;
+  doc.rect(fx-tw, 136, tw, 17, 'F'); doc.setDrawColor(200,200,200); doc.rect(fx-tw, 136, tw, 17);
+  doc.setTextColor(30,30,200); doc.setFont('helvetica','normal'); doc.text(pdfTxt(fechaTxt), fx-8, 148, {align:'right'});
+  doc.setTextColor(0,0,0); doc.setFont('helvetica','bold'); doc.text('Fecha:', fx-tw-8, 148, {align:'right'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(90,90,90);
+  (sub||[]).forEach((l,i)=>doc.text(pdfTxt(l), 40, 148+i*12));
+  return {doc, y: 166+Math.max(0,(sub||[]).length-1)*12};
+}
 async function pdfNew(titulo, sub){
   await loadPDF();
   const doc = new window.jspdf.jsPDF({unit:'pt', format:'a4'}), W = doc.internal.pageSize.getWidth();
@@ -866,8 +886,8 @@ const tipoLab = f => ({todos:'Todos los productos', bal:'Solo balanceado', ins:'
 function consumoRep(c){
   if(c.por==='prod'){
     const mm = new Map();
-    S.salidas.filter(x=>x.f>=c.desde && x.f<=c.hasta && (!c.doc || x.doc===c.doc) && tipoOk(x.c,c.filtro)).forEach(x=>{ const r=mm.get(x.c)||{c:x.c,q:0,n:0}; r.q+=x.q; r.n++; mm.set(x.c,r); });
-    return {prods:[...mm.values()].sort((a,b)=>pName(a.c).localeCompare(pName(b.c),'es'))};
+    S.salidas.filter(x=>x.f>=c.desde && x.f<=c.hasta && (!c.doc || x.doc===c.doc) && tipoOk(x.c,c.filtro)).forEach(x=>{ const r=mm.get(x.c)||{c:x.c,q:0,n:0,docs:{}}; r.q+=x.q; r.n++; const d=x.doc||'SIN PSC'; r.docs[d]=(r.docs[d]||0)+x.q; mm.set(x.c,r); });
+    return {prods:[...mm.values()].sort((a,b)=>pName(a.c).localeCompare(pName(b.c),'es')).map(r=>Object.assign(r,{lista:Object.entries(r.docs).sort((a,b)=>docSort(a[0],b[0]))}))};
   }
   let per = {};
   if(c.tras){ const {R} = consumoDestinos(c.desde, c.hasta, c.filtro); Object.keys(R).forEach(d=>{ const a=addMaps(R[d].dir,R[d].rec); if(sumMap(a)>1e-9) per[d]=a; }); }
@@ -881,7 +901,7 @@ function showRep(){
   const c = ui.rc, r = consumoRep(c), docsAll = [...new Set(S.salidas.map(m=>m.doc).filter(Boolean))].sort(docSort);
   const m = calc(), conSaldo = S.productos.filter(p=>(m.get(p.c)||{}).stock>0).length;
   let prev = '';
-  if(c.por==='prod') prev = `<table class="tbl"><tr><th>Producto</th><th class="n">Salidas</th><th class="n">Consumido</th></tr>${r.prods.map(x=>`<tr><td>${esc(pName(x.c))}<br><span style="color:var(--muted)">${esc(x.c)}</span></td><td class="n">${x.n}</td><td class="n"><b>${n2(x.q)} ${esc(pUnit(x.c))}</b></td></tr>`).join('')||'<tr><td colspan="3" class="empty">Sin consumos en el período.</td></tr>'}</table>`;
+  if(c.por==='prod') prev = `<table class="tbl"><tr><th>Código</th><th>Producto</th><th>PSC</th><th class="n">Cantidad</th><th>Medida</th></tr>${r.prods.map(x=>x.lista.map(([d,q],i)=>`<tr><td>${i?'':esc(x.c)}</td><td>${i?'':esc(pName(x.c))}</td><td>${esc(d)}</td><td class="n">${q2(q)}</td><td>${esc(medida(x.c))}</td></tr>`).join('')+`<tr><td></td><td></td><td class="neg">TOTAL</td><td class="n neg">${q2(x.q)}</td><td></td></tr>`).join('')||'<tr><td colspan="5" class="empty">Sin consumos en el período.</td></tr>'}</table>`;
   else prev = `<table class="tbl"><tr><th>Destino</th><th>Producto</th><th class="n">Consumido</th></tr>${r.docs.map(g=>g.items.map(([cd,q],i)=>`<tr>${i===0?`<td rowspan="${g.items.length}"><b>${esc(docLab(g.doc)||g.doc)}</b><br><span style="color:var(--muted)">${esc(porUnidad(Object.fromEntries(g.items)))}</span></td>`:''}<td>${esc(pName(cd))}</td><td class="n">${n2(q)} ${esc(pUnit(cd))}</td></tr>`).join('')).join('')||'<tr><td colspan="3" class="empty">Sin consumos en el período.</td></tr>'}</table>`;
   openSheet(`<h2>Reportes</h2>
     <div class="set-block" style="padding:10px 0"><h3 style="font-size:16px">Saldo disponible</h3>
@@ -899,10 +919,31 @@ function showRep(){
     <div class="actions"><button class="btn ghost" onclick="closeSheet()" style="grid-column:1/-1">Cerrar</button></div>`);
   $('#sheet').classList.add('wide');
 }
+async function pdfDespacho(c, r){
+  const fechaTxt = c.desde===c.hasta ? fdate(c.desde).replace(/ /g,'-') : fdate(c.desde)+' al '+fdate(c.hasta);
+  const extra = [tipoLab(c.filtro)+(c.doc?' · Solo '+(docLab(c.doc)||c.doc):'')];
+  const {doc, y} = await pdfEmpresa(c.desde===c.hasta?'DESPACHO DE BODEGA':'DESPACHO DE BODEGA - CONSUMO POR PRODUCTO', fechaTxt, extra);
+  const body = [];
+  r.prods.forEach(x=>{
+    x.lista.forEach(([d,q],i)=>body.push([i?'':x.c, i?'':pdfTxt(pName(x.c)), d, q2(q), medida(x.c)]));
+    body.push([{content:'',styles:{lineWidth:{bottom:0.8}}}, {content:'',styles:{lineWidth:{bottom:0.8}}}, {content:'TOTAL', styles:{textColor:[220,0,0], fontStyle:'bold', halign:'center', lineWidth:{bottom:0.8}}},
+      {content:q2(x.q), styles:{textColor:[220,0,0], fontStyle:'bold', halign:'right', lineWidth:{bottom:0.8}}}, {content:'',styles:{lineWidth:{bottom:0.8}}}]);
+  });
+  doc.autoTable({startY:y, head:[['Código','Producto','PSC','Cantidad','Medida']], body, theme:'plain',
+    styles:{font:'helvetica', fontSize:9, cellPadding:{top:2.5,bottom:2.5,left:4,right:4}, textColor:[0,0,0], lineColor:[150,150,150], lineWidth:{bottom:0.3}},
+    headStyles:{fontStyle:'bold', lineWidth:{bottom:0.8}, lineColor:[0,0,0]},
+    columnStyles:{0:{cellWidth:62},1:{cellWidth:'auto'},2:{cellWidth:52,halign:'center'},3:{cellWidth:62,halign:'right'},4:{cellWidth:78,halign:'center'}},
+    margin:{left:40,right:40,bottom:40}});
+  const fy = doc.lastAutoTable.finalY + 16; doc.setFontSize(8.5); doc.setTextColor(90,90,90);
+  if(!r.prods.length) doc.text('Sin consumos en el período.', 40, fy);
+  return {doc, nombre:(c.desde===c.hasta?'Despacho_bodega_'+c.desde:'Despacho_bodega_'+c.desde+'_a_'+c.hasta)+'.pdf'};
+}
 async function pdfConsumo(){
   try{
+    if(ui.rc.por==='prod'){ const o = await pdfDespacho(ui.rc, consumoRep(ui.rc)); return pdfFin(o.doc, o.nombre); }
     const c = ui.rc, r = consumoRep(c), {doc, y} = await pdfNew(c.por==='prod'?'Consumo por producto':'Consumo por piscina / precría', repSub(c));
-    if(c.por==='prod'){
+    if(c.por==='prod'){ /* reemplazado abajo */ }
+    if(false){
       doc.autoTable(Object.assign({}, tblStyle, {startY:y, head:[['Código','Descripción','Unidad','N. salidas','Consumido']],
         body: r.prods.map(x=>[x.c, pdfTxt(pName(x.c)), pUnit(x.c), x.n, n2(x.q)]),
         foot: [['','TOTAL', '', r.prods.reduce((a,x)=>a+x.n,0), pdfTxt(porUnidad(Object.fromEntries(r.prods.map(x=>[x.c,x.q]))))]],
@@ -922,7 +963,7 @@ async function pdfConsumo(){
 }
 async function xlsConsumo(){
   try{ await loadXLSX(); const c=ui.rc, r=consumoRep(c), rows=[[c.por==='prod'?'CONSUMO POR PRODUCTO':'CONSUMO POR PISCINA / PRECRÍA'],[repSub(c)[0]],[]];
-    if(c.por==='prod'){ rows.push(['Código','Descripción','Unidad','N. salidas','Consumido']); r.prods.forEach(x=>rows.push([x.c,pName(x.c),pUnit(x.c),x.n,Math.round(x.q*100)/100])); }
+    if(c.por==='prod'){ rows.push(['Código','Producto','PSC','Cantidad','Medida']); r.prods.forEach(x=>{ x.lista.forEach(([d,q],i)=>rows.push([i?'':x.c, i?'':pName(x.c), d, Math.round(q*100)/100, medida(x.c)])); rows.push(['','','TOTAL',Math.round(x.q*100)/100,'']); }); }
     else { rows.push(['Destino','Código','Descripción','Unidad','Consumido']); r.docs.forEach(g=>g.items.forEach(([cd,q])=>rows.push([docLab(g.doc)||g.doc,cd,pName(cd),pUnit(cd),Math.round(q*100)/100]))); }
     const wb=XLSX.utils.book_new(), ws=XLSX.utils.aoa_to_sheet(rows); ws['!cols']=[14,12,50,9,12].map(x=>({wch:x})); XLSX.utils.book_append_sheet(wb,ws,'Consumo');
     XLSX.writeFile(wb,(c.por==='prod'?'Consumo_por_producto_':'Consumo_por_piscina_')+c.desde+'_a_'+c.hasta+'.xlsx'); toast('Excel generado');

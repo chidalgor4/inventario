@@ -1444,13 +1444,14 @@ async function excelSync(manual){
       const [f,c,p,q] = k.split('|'), nm = c2n[c];
       if(!nm){ skipped.push({k, motivo:'El código '+c+' no está en CODIGOS: no se pudo escribir'}); continue; }
       const eTxt = p==='N/A' ? 'N/A' : "'"+p, row = [xSerial(f), nm, +q, eTxt];
-      let fila = 0;
+      let fila = 0, fmtA = 'General';
       while(empty.length){
-        const cand = empty.shift(), chk = await gx(W+rng('A'+cand,'E'+cand)+'?$select=values', {headers:H}), v = (chk.values||[[]])[0];
-        if([v[0],v[2],v[3],v[4]].every(z=>z===''||z==null)){ fila = cand; break; }      // alguien la llenó a mano: se toma la siguiente
+        const cand = empty.shift(), chk = await gx(W+rng('A'+cand,'E'+cand)+'?$select=values,numberFormat', {headers:H}), v = (chk.values||[[]])[0];
+        if([v[0],v[2],v[3],v[4]].every(z=>z===''||z==null)){ fila = cand; fmtA = ((chk.numberFormat||[[]])[0][0]||'General'); break; }      // alguien la llenó a mano: se toma la siguiente
       }
       if(fila){
-        await gx(W+rng('A'+fila,'A'+fila), {method:'PATCH', headers:hj, body:JSON.stringify({values:[[row[0]]], numberFormat:[['m/d/yyyy']]})});   // mismo formato de fecha que el resto de la columna
+        const fa = /[dmy]/i.test(fmtA) ? {values:[[row[0]]]} : {values:[[row[0]]], numberFormat:[['dd/mm/yyyy']]};   // si la celda ya tiene formato de fecha se respeta; si está en General, día/mes/año
+        await gx(W+rng('A'+fila,'A'+fila), {method:'PATCH', headers:hj, body:JSON.stringify(fa)});
         await gx(W+rng('C'+fila,'E'+fila), {method:'PATCH', headers:hj, body:JSON.stringify({values:[[row[1],row[2],row[3]]]})});
       } else {
         const r = await gx(W+"/tables('"+XL.table+"')/rows/add", {method:'POST', headers:hj, body:JSON.stringify({values:[[row[0], XL.B, row[1], row[2], row[3], '']]})});

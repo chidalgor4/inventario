@@ -1433,7 +1433,7 @@ async function excelSync(manual){
         if([v[0],v[2],v[3],v[4]].every(z=>z===''||z==null)){ fila = cand; break; }      // alguien la llenó a mano: se toma la siguiente
       }
       if(fila){
-        await gx(W+rng('A'+fila,'A'+fila), {method:'PATCH', headers:hj, body:JSON.stringify({values:[[row[0]]]})});
+        await gx(W+rng('A'+fila,'A'+fila), {method:'PATCH', headers:hj, body:JSON.stringify({values:[[row[0]]], numberFormat:[['m/d/yyyy']]})});   // mismo formato de fecha que el resto de la columna
         await gx(W+rng('C'+fila,'E'+fila), {method:'PATCH', headers:hj, body:JSON.stringify({values:[[row[1],row[2],row[3]]]})});
       } else {
         const r = await gx(W+"/tables('"+XL.table+"')/rows/add", {method:'POST', headers:hj, body:JSON.stringify({values:[[row[0], XL.B, row[1], row[2], row[3], '']]})});

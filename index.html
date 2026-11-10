@@ -935,11 +935,11 @@ function consumoRep(c){
 }
 function repSub(c){ return ['Del '+fdate(c.desde)+' al '+fdate(c.hasta)+' · '+tipoLab(c.filtro)+(c.por==='prod'&&c.doc?' · Solo '+(docLab(c.doc)||c.doc):'')+(c.por==='pisc'?(c.tras?' · Con traspasos aplicados':' · Sin traspasos (consumo directo)'):'')]; }
 /* ---------- Reporte de consumos diarios con el formato de la hoja CORREO de NUBE.xlsx ----------
-   Filas fijas: PSC 1..20, 9B y PRE01..PRE11 (igual que CORREO). Columnas: solo los productos que
-   tuvieron salidas en la fecha elegida, en el mismo orden de la hoja CORREO; los demás se eliminan. */
+   Columnas fijas: PSC 1..20, 9B y PRE01..PRE11. Filas: solo los productos que tuvieron salidas en la
+   fecha elegida (balanceado A-Z, luego insumos A-Z). El No. aumenta 1 por día (13/10/2026 = 2233). */
 const CORREO_ORDEN = ['00577','03351','03473','00743','03567','03518','03521','00651','00653','00759','00670','02919','03397','00394','00475','02448','00585','03328','03236','00400','00643','00506','00239','03235','03214','03329','00707','00403','00476','00273','02949','00494','03326','00308','03358'];
 const CORREO_FIRMAS = [['Revisado por :','YEISON RODRIGUEZ','Producción'],['Aprobado por:','DIEGO TORRES','Administración'],['Recibido por:','KERLY MALDONADO','Contabilidad']];
-ui.cr = ui.cr || {fecha: todayISO()};
+ui.cr = ui.cr || {fecha: todayISO(), elab: (()=>{ try{ return localStorage.getItem('inv_elab')||''; }catch(e){ return ''; } })()};
 function codigosXL(){ try{ return JSON.parse(localStorage.getItem('inv_codigos')||'{}')||{}; }catch(e){ return {}; } }
 function correoDatos(fecha){
   const M = {}, filas = [...PSC, ...PRE];
@@ -953,9 +953,11 @@ function correoDatos(fecha){
 }
 const corNum = (v,d) => (Math.round(v*Math.pow(10,d))/Math.pow(10,d)).toFixed(d).replace('.',',').replace(/\B(?=(\d{3})+(?!\d))/g,'.');
 async function imgData(src){ try{ const b = await (await fetch(src)).blob(); return await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(b); }); }catch(e){ return null; } }
-function elaboradoPor(){ const n = (od().name||'').trim(); return (n || userName(me()) || '').toUpperCase(); }
+function elaboradoPor(){ return String(ui.cr.elab||'').trim().toUpperCase(); }
 async function pdfCorreo(){
   const fecha = ui.cr.fecha; if(!RX_DT.test(fecha||'')) return toast('Elige una fecha');
+  if(!String(ui.cr.elab||'').trim()) return toast('Escribe quién elabora el reporte');
+  try{ localStorage.setItem('inv_elab', String(ui.cr.elab).trim()); }catch(e){}
   const {M, codes, filas, otros} = correoDatos(fecha);
   if(!codes.length) return toast('No hay salidas a piscinas o precrías el '+fdate(fecha));
   try{ await loadPDF(); }catch(e){ return toast(e.message); }
@@ -984,47 +986,46 @@ async function pdfCorreo(){
   const largo = new Date(fecha+'T12:00:00').toLocaleDateString('es-EC',{weekday:'long', day:'numeric', month:'long', year:'numeric'});
   font('bold',10.5,NAVY); T('Fecha:', m+180, y+4, {align:'right'}); font('bold',10.5); T(largo, m+188, y+4);
   font('times',15,NAVY); T('Especie Litopenaeus Vannamei', W-m, y+5, {align:'right'});
-  // tabla
+  // tabla: piscinas y precrías hacia los lados; productos hacia abajo (balanceado A-Z, luego insumos A-Z)
   y += 16;
-  const n = codes.length, wA = 16, wB = 32, wT = 38, avail = W-2*m-wA-wB-wT, cw = Math.min(44, avail/n);
-  const tw = wA+wB+n*cw+wT, x0 = m + (W-2*m-tw)/2, xB = x0+wA, xC = xB+wB, xT = xC+n*cw;
-  const hName = 122, hU = 10, hC = 10, foot = 50, rows = filas.length+1;
-  const rh = Math.min(12, (H-m-foot-(y+hName+hU+hC))/rows);
-  const yU = y+hName, yC = yU+hU, yR = yC+hC, yEnd = yR+rows*rh;
-  // nombres de productos (vertical), unidad y código
-  font('bold',6.5,RED); ['DETALLE','DE','INSUMOS'].forEach((w,i)=>T(w, xB+wB/2, yU-24+i*8, {align:'center'}));
-  codes.forEach((c,i)=>{
-    const x = xC+i*cw, name = codigosXL()[c] || pName(c);
-    font('bold',7.2,BLUE); const lines = doc.splitTextToSize(pdfTxt(name), hName-6).slice(0,3);
-    const lh = 8, start = x + cw/2 - (lines.length-1)*lh/2 + 2.6;
-    lines.forEach((l,j)=>doc.text(l, start + j*lh, yU-3, {angle:90}));
-    font('bold',6.5,PURPLE); T(pUnit(c), x+cw/2, yU+7.5, {align:'center'});
-    font('bold',7); T(String(+c||c), x+cw/2, yC+7.5, {align:'center'});
-  });
-  font('normal',7); T('COD.', xB+wB/2, yC+7.5, {align:'center'});
+  const nm = c => codigosXL()[c] || pName(c);
+  const prods = [...codes.filter(esBal).sort((a,b)=>nm(a).localeCompare(nm(b),'es')), ...codes.filter(c=>!esBal(c)).sort((a,b)=>nm(a).localeCompare(nm(b),'es'))];
+  const nC = filas.length, wN = 150, wK = 28, wU = 22, wT = 36, cw = (W-2*m-wN-wK-wU-wT)/nC;
+  const xN = m, xK = xN+wN, xU = xK+wK, xC = xU+wU, xT = xC+nC*cw, xE = xT+wT;
+  const hG = 12, hP = 14, foot = 50, rows = prods.length+1;
+  const yP = y+hG, yR = yP+hP, rh = Math.min(20, (H-m-foot-yR)/rows), yTot = yR+prods.length*rh, yEnd = yTot+rh;
+  const fit = (t, x, yy, w, sz) => { let z = sz; doc.setFontSize(z); while(z>4.5 && doc.getTextWidth(t)>w-2){ z-=0.3; doc.setFontSize(z); } doc.text(t, x, yy, {align:'center'}); };
+  const val = v => v ? corNum(v, Math.abs(v-Math.round(v))<1e-9 ? 0 : 2) : '';
+  // encabezados
+  font('bold',9,RED); T('PRODUCTO', xN+wN/2, yP+hP/2+3, {align:'center'});
+  font('normal',7); T('COD.', xK+wK/2, yP+hP/2+2.5, {align:'center'}); font('bold',6.5,PURPLE); T('UND', xU+wU/2, yP+hP/2+2.5, {align:'center'});
+  const xPre = xC+PSC.length*cw;
+  font('bold',8,NAVY); T('PISCINA', (xC+xPre)/2, y+hG/2+3, {align:'center'}); T('PRECRIADERO (PRE)', (xPre+xT)/2, y+hG/2+3, {align:'center'});
+  font('bold',8,[0,0,0]); T('TOTAL', xT+wT/2, yP+hP/2+3, {align:'center'});
+  filas.forEach((d,k)=>{ const lab = PSC.includes(d) ? String(d).replace(/^0/,'') : d.replace(/^PRE/,''); font('bold', 8, GREEN); T(lab, xC+k*cw+cw/2, yP+hP/2+2.8, {align:'center'}); });
   // cuerpo
-  const colTot = new Array(n).fill(0); let gran = 0;
-  filas.forEach((d,r)=>{
-    const yy = yR + r*rh, lab = PSC.includes(d) ? String(d).replace(/^0/,'') : d, row = M[d]||{}; let tot = 0;
-    font('bold', PSC.includes(d)?8:6.5, GREEN); T(lab, xB+wB/2, yy+rh/2+2.6, {align:'center'});
-    codes.forEach((c,i)=>{ const v = row[c]||0; if(v){ tot+=v; colTot[i]+=v; font('bold',7.2); T(corNum(v,2), xC+i*cw+cw/2, yy+rh/2+2.5, {align:'center'}); } });
-    gran += tot; font('bold',7.2); T(corNum(tot,1), xT+wT/2, yy+rh/2+2.5, {align:'center'});
+  const colTot = new Array(nC).fill(0); let gran = 0;
+  prods.forEach((c,r)=>{
+    const yy = yR+r*rh, mid = yy+rh/2+2.5; let tot = 0;
+    font('bold',6.8,BLUE); const ln = doc.splitTextToSize(pdfTxt(nm(c)), wN-6).slice(0,2); ln.forEach((l,j)=>doc.text(l, xN+3, mid + (j-(ln.length-1)/2)*7.5));
+    font('bold',6.8); T(String(+c||c), xK+wK/2, mid, {align:'center'});
+    font('bold',6.5,PURPLE); T(pUnit(c), xU+wU/2, mid, {align:'center'});
+    font('bold',6.8);
+    filas.forEach((d,k)=>{ const v = (M[d]||{})[c]||0; if(v){ tot+=v; colTot[k]+=v; fit(val(v), xC+k*cw+cw/2, mid, cw, 6.8); } });
+    gran += tot; T(corNum(tot, Math.abs(tot-Math.round(tot))<1e-9?0:2), xT+wT/2, mid, {align:'center'});
   });
-  const yTot = yR + filas.length*rh;
-  font('normal',7.5); T('total', xB+wB/2, yTot+rh/2+2.6, {align:'center'});
-  colTot.forEach((v,i)=>T(corNum(v,1), xC+i*cw+cw/2, yTot+rh/2+2.6, {align:'center'}));
-  font('bold',7.5); T(corNum(gran,1), xT+wT/2, yTot+rh/2+2.6, {align:'center'});
-  // PISCINA / PRECRIADERO (vertical, combinadas)
-  const yPre = yR + PSC.length*rh;
-  font('bold',8,NAVY); doc.text('PISCINA', x0+wA/2+3, (yR+yPre)/2+doc.getTextWidth('PISCINA')/2, {angle:90});
-  font('bold',6.5,NAVY); doc.text('PRECRIADERO', x0+wA/2+2.5, (yPre+yTot)/2+doc.getTextWidth('PRECRIADERO')/2, {angle:90});
-  // líneas de la tabla
+  font('bold',7.5); T('TOTAL', xN+3, yTot+rh/2+2.6);
+  font('bold',6.8); colTot.forEach((v,k)=>fit(val(v), xC+k*cw+cw/2, yTot+rh/2+2.6, cw, 6.8));
+  font('bold',7.2); T(corNum(gran, Math.abs(gran-Math.round(gran))<1e-9?0:2), xT+wT/2, yTot+rh/2+2.6, {align:'center'});
+  // líneas
+  const nBal = prods.filter(esBal).length;
   doc.setDrawColor(...GRID); doc.setLineWidth(0.3);
-  [y, yU, yC, yR].forEach(v=>doc.line(xB, v, xT+wT, v));
-  for(let r=1;r<=rows;r++) doc.line(xB, yR+r*rh, xT+wT, yR+r*rh);
-  [xB, ...codes.map((_,i)=>xC+i*cw), xT, xT+wT].forEach(v=>doc.line(v, y, v, yEnd));
-  doc.line(x0, yR, x0, yTot); doc.line(x0, yR, xB, yR); doc.line(x0, yPre, xB, yPre); doc.line(x0, yTot, xB, yTot);
-  doc.setDrawColor(0,0,0); doc.setLineWidth(0.6); doc.line(xB, yTot, xT+wT, yTot);
+  doc.line(xC, y, xT, y); doc.line(xN, yP, xE, yP); doc.line(xN, yR, xE, yR);
+  for(let r=1;r<=rows;r++) doc.line(xN, yR+r*rh, xE, yR+r*rh);
+  [xN, xK, xU, xT, xE].forEach(v=>doc.line(v, yP, v, yEnd));
+  for(let k=0;k<=nC;k++) doc.line(xC+k*cw, k===0||k===PSC.length||k===nC ? y : yP, xC+k*cw, yEnd);
+  doc.setDrawColor(0,0,0); doc.setLineWidth(0.6); doc.line(xN, yTot, xE, yTot);
+  if(nBal && nBal<prods.length){ doc.setDrawColor(...NAVY); doc.line(xN, yR+nBal*rh, xE, yR+nBal*rh); }
   // firmas
   const firmas = [['Elaborado por:', elaboradoPor(), 'Bodega'], ...CORREO_FIRMAS], fw = (W-2*m)/4, fy = H-m-22;
   firmas.forEach(([t,nm,area],i)=>{ const fx = m+i*fw+12, lw = fw-24;
@@ -1046,8 +1047,9 @@ function showRep(){
       <p style="font-size:14px;color:var(--muted)">Todos los productos con saldo mayor a cero (${conSaldo}), con código, descripción, unidad y saldo actual.</p>
       <button class="btn primary full" onclick="pdfSaldos()">Descargar PDF de saldos</button></div>
     <div class="set-block" style="padding:10px 0"><h3 style="font-size:16px">Consumos diarios (formato CORREO)</h3>
-      <p style="font-size:14px;color:var(--muted)">El mismo formato de la hoja CORREO de NUBE: piscinas y precrías hacia abajo, y solo los productos que salieron ese día. "Elaborado por" lleva el nombre de quien inició sesión.</p>
-      <div class="field"><label>Fecha</label><input type="date" value="${esc(ui.cr.fecha)}" onchange="ui.cr.fecha=this.value;showRep()"></div>
+      <p style="font-size:14px;color:var(--muted)">Formato de la hoja CORREO de NUBE: piscinas y precrías hacia los lados; hacia abajo solo los productos que salieron ese día (balanceado y luego insumos, de la A a la Z).</p>
+      <div class="row"><div class="field"><label>Fecha</label><input type="date" value="${esc(ui.cr.fecha)}" onchange="ui.cr.fecha=this.value;showRep()"></div>
+        <div class="field"><label>Elaborado por</label><input maxlength="60" value="${esc(ui.cr.elab||'')}" placeholder="Nombre de quien pide el reporte" oninput="ui.cr.elab=this.value"></div></div>
       ${(()=>{ const d=correoDatos(ui.cr.fecha); return `<div class="info" style="margin:0 0 8px">${d.codes.length} producto(s) con salidas el ${esc(fdate(ui.cr.fecha))}${d.codes.length?': '+esc(d.codes.map(c=>pName(c)).join(', ')):''}</div>`; })()}
       <button class="btn primary full" onclick="pdfCorreo()">Descargar PDF de consumos diarios</button></div>
     <div class="set-block" style="padding:10px 0"><h3 style="font-size:16px">Consumo entre fechas</h3>

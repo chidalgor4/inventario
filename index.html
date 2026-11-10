@@ -189,7 +189,7 @@ function sReg(s){ s=(s&&typeof s==='object')?s:{}; return {entradas:sRecs(s.entr
 const uid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 /* Piscinas (PSC) y precrías (PRE): mismo formato que la hoja Salidas */
 const PSC=['01','02','03','04','05','06','07','08','09','09B','10','11','12','13','14','15','16','17','18','19','20'];
-const PRE=['PRE01','PRE02','PRE03','PRE04','PRE05','PRE06','PRE07','PRE08','PRE09','PRE10'];
+const PRE=['PRE01','PRE02','PRE03','PRE04','PRE05','PRE06','PRE07','PRE08','PRE09','PRE10','PRE11'];
 const docLab = d => { d=String(d||''); return /^PRE\d+$/i.test(d) ? 'Precría '+Number(d.slice(3)) : /^\d+B?$/i.test(d) ? 'Piscina '+d.replace(/^0/,'') : d; };
 function docField(){
   if(mv.t==='e') return `<label>Nro. documento</label><input id="md" value="${esc(mv.doc||'')}" inputmode="text">`;
@@ -227,6 +227,7 @@ const isAdmin = () => od().role==='admin';
 const regKey = email => String(email||'').toLowerCase().replace(/[^a-z0-9]/g,'_')+'.json';
 const fileOwner = f => { const u=D.master.usuarios.find(x=>x.file===f); return u?u.email:''; };
 function userName(email){
+  if(email===XL.user) return 'Archivo Excel (manual)';
   if(!email || email===D.master.admin) return 'Administrador';
   const u=D.master.usuarios.find(x=>x.email===email); return u&&u.nombre ? u.nombre : email.split('@')[0];
 }
@@ -591,6 +592,7 @@ function vSet(){
       ${on&&!adm&&curScope()!==SCOPE_ALL?'<div class="info bad" style="margin-top:10px">Aún no tienes acceso a la carpeta compartida.'+(o.needApproval?' Microsoft indica que falta la aprobación del administrador de sistemas de la empresa.':'')+'</div><button class="btn primary full" style="margin-top:8px" onclick="requestShared()">Solicitar acceso</button>':''}
       ${o.last?'<p style="font-size:13px;color:var(--muted);margin-top:8px">Última sincronización: '+esc(fdt(o.last))+'</p>':''}</div>
     ${adm?usersBlock(btn):''}
+    ${adm?xlBlock(btn):''}
     ${on?`<div class="set-block"><h3>Carga masiva de consumo</h3>
       <p style="font-size:14px">Sube desde la computadora las salidas (balanceado, medicamentos y demás) de todas las piscinas y precrías. Se lee solo la pestaña <b>CONSUMO</b> y solo las filas visibles del filtro.</p>
       <div class="stack"><button class="btn primary" onclick="openCarga()">Subir plantilla de consumo</button>
@@ -1285,6 +1287,7 @@ async function autoSync(manual){
     if(!admin) await syncMine();
     await syncRegs(admin);
     derive(); persist(); odSet({last:Date.now()});
+    if(admin) await excelSync(manual);
     const typing = document.activeElement && ['INPUT','SELECT'].includes(document.activeElement.tagName);
     if(!$('#sheet').classList.contains('show') && !typing) render();
     if(manual) toast('Sincronizado');
@@ -1292,6 +1295,209 @@ async function autoSync(manual){
     syncErr = true; if(manual || /habilitado/.test(e.message)) toast(e.message);
     if(/venció/.test(e.message) && !$('#sheet').classList.contains('show')){ try{ await odAutoLogin(); }catch(x){} if(!od().token) showGate(); }
   }finally{ syncing = false; paintChip(); }
+}
+/* ---------- Sincronización con la hoja CONSUMO de NUBE.xlsx (Excel en OneDrive) ----------
+   Solo la sesión del administrador escribe en el libro, celda por celda, a través de la API de
+   Excel de Microsoft Graph: nunca se sube el archivo, así no se tocan fórmulas, tablas ni otras hojas.
+   Cada salida se identifica por fecha|código|piscina|cantidad y se compara por CONTEO contra la
+   última sincronización (base): solo se copia lo que cambió, y lo que aparece en ambos lados se une.
+   En la hoja CONSUMO se escriben solo A (FECHA), C (NOMBRE), D (CANTIDAD) y E (PISCINA).          */
+const XL = {file:'NUBE.xlsx', table:'CONSUMO', sheet:'CONSUMO', codigos:'CODIGO', state:'sync-consumo-nube.json',
+  corte:'2026-11-10', user:'excel@nube.xlsx', B:"=VLOOKUP([@NOMBRE],CODIGOS!$B$2:$C$1100,2,FALSE)"};
+const XL_KEY = 'inv_gambirasi_xl';
+const xlLocal = () => { try{ return JSON.parse(localStorage.getItem(XL_KEY)||'null'); }catch(e){ return null; } };
+const xlSetLocal = z => { try{ localStorage.setItem(XL_KEY, JSON.stringify(z)); }catch(e){} };
+const devId = () => { let d=''; try{ d=localStorage.getItem('inv_dev')||''; if(!d){ d=uid(); localStorage.setItem('inv_dev',d); } }catch(e){} return d||'x'; };
+const xSerial = iso => { const [y,m,d]=iso.split('-').map(Number); return Math.round((Date.UTC(y,m-1,d)-Date.UTC(1899,11,30))/864e5); };
+const xIso = n => new Date(Date.UTC(1899,11,30)+Math.round(n)*864e5).toISOString().slice(0,10);
+const xName = s => String(s??'').replace(/ /g,' ').replace(/\s+/g,' ').trim().toUpperCase();
+const xCode = s => { s=String(s??'').trim(); return /^\d{1,5}$/.test(s) ? s.padStart(5,'0') : s; };
+function xPisc(v){   // "1"→"01", "PSC 9b"→"09B", "pre1"→"PRE01"; lo demás (devoluciones, otros) → "N/A"
+  let s = String(v??'').toUpperCase().replace(/\s+/g,'').replace(/^PSC/,'');
+  if(/^\d{1,2}B?$/.test(s)) return s.replace(/^(\d+)/, m=>m.padStart(2,'0'));
+  if(/^PRE\d{1,2}$/.test(s)) return 'PRE'+s.slice(3).padStart(2,'0');
+  return 'N/A';
+}
+const xQ = q => Math.round((+q||0)*100)/100;
+const xKey = (f,c,p,q) => f+'|'+c+'|'+p+'|'+xQ(q);
+const xHash = s => { let h=5381; for(let i=0;i<s.length;i++) h=((h<<5)+h+s.charCodeAt(i))|0; return (h>>>0).toString(36)+'.'+s.length; };
+function sZ(z){ z=(z&&typeof z==='object')?z:{}; const n=v=>sNum(v);
+  return {on:!!z.on, corte:RX_DT.test(z.corte)?z.corte:XL.corte, inicio:n(z.inicio), base:sMap(z.base,n), ids:sMap(z.ids,v=>sStr(v,120)),
+    mod:sStr(z.mod,40), ctag:sStr(z.ctag,300), sigA:sStr(z.sigA,40), lock:(z.lock&&typeof z.lock==='object')?{by:sStr(z.lock.by,40),until:n(z.lock.until)}:null,
+    last:n(z.last), stats:sMap(z.stats,n), review:(Array.isArray(z.review)?z.review:[]).slice(0,200).map(r=>({fila:n(r&&r.fila), motivo:sStr(r&&r.motivo,120), txt:sStr(r&&r.txt,200)})),
+    log:(Array.isArray(z.log)?z.log:[]).slice(-300).map(r=>({t:n(r&&r.t), a:sStr(r&&r.a,12), fila:n(r&&r.fila), k:sStr(r&&r.k,120)})), err:sStr(z.err,300), grown:!!z.grown, filas:n(z.filas)}; }
+function appMulti(corte){   // salidas de la app (de todos los usuarios) desde el corte, agrupadas por clave
+  const A = {};
+  S.salidas.forEach(s=>{ if(s.f<corte || !(s.q>0)) return; const k=xKey(s.f,xCode(s.c),xPisc(s.doc),s.q); (A[k]=A[k]||[]).push(s); });
+  return A;
+}
+const sigOf = A => xHash(Object.keys(A).sort().map(k=>k+'#'+A[k].length).join(';'));
+const wait = ms => new Promise(r=>setTimeout(r,ms));
+async function gx(path, opt){   // Graph con reintentos cuando el libro está ocupado o hay demasiadas llamadas
+  for(let i=0;;i++){
+    try{ return await graph(path, opt); }
+    catch(e){ if(![409,423,429,500,502,503,504].includes(e.status) || i>=3) throw e; await wait([3000,8000,20000][i]); }
+  }
+}
+async function xlLoadState(){ const m = await graph(ip(XL.state)); return {z: m ? sZ(await readJSON(itemUrl(m.id)+'/content')) : null, meta:m}; }
+async function xlSaveState(z, meta){   // con If-Match: si otro equipo lo cambió, se detiene (no se pisa)
+  const hdr = Object.assign({}, J); if(meta && meta.eTag) hdr['If-Match'] = meta.eTag;
+  const r = await graph(meta ? itemUrl(meta.id)+'/content' : ip(XL.state)+':/content', {method:'PUT', headers:hdr, body:JSON.stringify(z)});
+  xlSetLocal(z); return r;
+}
+let xlBusy = false;
+async function excelSync(manual){
+  if(!isAdmin() || !navigator.onLine || xlBusy) return;
+  xlBusy = true; let st = null, W = null, H = null;
+  try{
+    st = await xlLoadState(); let Z = st.z;
+    if(!Z || !Z.on){ if(Z) xlSetLocal(Z); return; }
+    const fm = await graph(ip(XL.file)+'?$select=id,lastModifiedDateTime,cTag');
+    if(!fm){ Z.err = 'No se encontró '+XL.file+' en la carpeta de la app.'; await xlSaveState(Z, st.meta); return; }
+    const A0 = appMulti(Z.corte), sigA = sigOf(A0);
+    if(!manual && fm.cTag===Z.ctag && sigA===Z.sigA && !Z.err) return;            // nada cambió en ningún lado
+    if(Z.lock && Z.lock.until>Date.now() && Z.lock.by!==devId()) return;          // otro equipo está sincronizando
+    Z.lock = {by:devId(), until:Date.now()+240000};
+    try{ st.meta = await xlSaveState(Z, st.meta); }catch(e){ if(e.status===412) return; throw e; }
+
+    W = itemUrl(fm.id)+'/workbook';
+    const ses = await gx(W+'/createSession', {method:'POST', headers:J, body:JSON.stringify({persistChanges:true})});
+    H = {'workbook-session-id': ses.id};
+    const hj = Object.assign({}, J, H), get = p => gx(W+p, {headers:H});
+    const rng = (a,b) => "/worksheets('"+XL.sheet+"')/range(address='"+a+":"+b+"')";
+
+    // CODIGOS: nombre exacto ↔ código
+    const cod = await get("/tables('"+XL.codigos+"')/range?$select=values"), n2c = {}, c2n = {};
+    (cod.values||[]).slice(1).forEach(r=>{ const nm=String(r[1]??''), c=xCode(r[2]||r[0]); if(!nm||!c) return; const k=xName(nm); if(!n2c[k]) n2c[k]=c; if(!c2n[c]) c2n[c]=nm; });
+
+    // filas de CONSUMO desde el corte
+    const tr = await get("/tables('"+XL.table+"')/range?$select=address"), last = +String(tr.address).match(/(\d+)$/)[1];
+    const cs = xSerial(Z.corte);
+    if(!Z.inicio || Z.inicio>last){
+      const col = await get(rng('A2','A'+last)+'?$select=values'); let lastOld = 1;
+      (col.values||[]).forEach((r,i)=>{ if(typeof r[0]==='number' && r[0]<cs) lastOld = i+2; });
+      Z.inicio = lastOld+1;
+    }
+    const E = {}, empty = [], review = [];
+    let vals = [];
+    if(Z.inicio<=last){ const rr = await get(rng('A'+Z.inicio,'F'+last)+'?$select=values'); vals = rr.values||[]; }
+    const prods = new Set(S.productos.map(p=>p.c));
+    vals.forEach((r,i)=>{
+      const fila = Z.inicio+i, [a,b,c,d,e] = r, blank = v => v===''||v===null||v===undefined;
+      if(blank(a)&&blank(c)&&blank(d)&&blank(e)){ empty.push(fila); return; }
+      if(typeof a==='number' && a<cs) return;                                     // anterior al corte: no se toca
+      const txt = [typeof a==='number'?xIso(a):a, c, d, e].join(' · ');
+      if(typeof a!=='number' || blank(c) || blank(d)) return review.push({fila, motivo:'Fila incompleta (falta fecha, nombre o cantidad)', txt});
+      const code = /^\d+$/.test(String(b)) ? xCode(b) : n2c[xName(c)];
+      if(!code) return review.push({fila, motivo:'El nombre no está en CODIGOS', txt});
+      if(!prods.has(code)) return review.push({fila, motivo:'El producto '+code+' no está en la app', txt});
+      if(!(+d>0)) return review.push({fila, motivo:'Cantidad no válida', txt});
+      const k = xKey(xIso(a), code, xPisc(e), +d); (E[k]=E[k]||[]).push(fila);
+    });
+
+    // comparar por conteo contra la base
+    const exT = Date.parse(fm.lastModifiedDateTime)||0;
+    const del = D.master.del||{}, keys = new Set([...Object.keys(A0),...Object.keys(E),...Object.keys(Z.base)]);
+    const appT = k => { let t=0; (A0[k]||[]).forEach(s=>{ if(!Z.ids[s.id]) t=Math.max(t,s.ets||s.ts||0); });
+      Object.keys(Z.ids).forEach(id=>{ if(Z.ids[id]===k && !(A0[k]||[]).some(s=>s.id===id)) t=Math.max(t, del[id]||0); }); return t; };
+    const toWrite = [], toClear = [], toImport = [], toDrop = [], base = {};
+    keys.forEach(k=>{
+      const a=(A0[k]||[]).length, e=(E[k]||[]).length, b=Z.base[k]||0, dA=a-b, dE=e-b;
+      let t;
+      if(dA===0) t = e; else if(dE===0) t = a;
+      else if(Math.sign(dA)===Math.sign(dE)) t = dA>0 ? Math.max(a,e) : Math.min(a,e);   // mismo cambio en ambos lados: se une
+      else t = appT(k) >= exT ? a : e;                                                   // lo más reciente gana
+      if(t>a) (E[k]||[]).slice(0,t-a).forEach(fila=>toImport.push({k,fila}));
+      if(t<a) (A0[k]||[]).slice().sort((x,y)=>((y.u===XL.user)-(x.u===XL.user))||((y.ets||y.ts)-(x.ets||x.ts))).slice(0,a-t).forEach(s=>toDrop.push(s));
+      if(t>e) for(let i=0;i<t-e;i++) toWrite.push(k);
+      if(t<e) (E[k]||[]).slice(-(e-t)).forEach(fila=>toClear.push({k,fila}));
+      if(t>0) base[k]=t;
+    });
+
+    // escribir en Excel: primero se vacían filas, luego se llenan filas preparadas (o se agregan al final de la tabla)
+    const log = [], now = Date.now();
+    for(const x of toClear){
+      await gx(W+rng('A'+x.fila,'A'+x.fila), {method:'PATCH', headers:hj, body:JSON.stringify({values:[['']]})});
+      await gx(W+rng('C'+x.fila,'E'+x.fila), {method:'PATCH', headers:hj, body:JSON.stringify({values:[['','','']]})});
+      empty.push(x.fila); log.push({t:now, a:'borrada', fila:x.fila, k:x.k});
+    }
+    empty.sort((a,b)=>a-b);
+    let grown = false; const skipped = [];
+    for(const k of toWrite){
+      const [f,c,p,q] = k.split('|'), nm = c2n[c];
+      if(!nm){ skipped.push({k, motivo:'El código '+c+' no está en CODIGOS: no se pudo escribir'}); continue; }
+      const eTxt = p==='N/A' ? 'N/A' : "'"+p, row = [xSerial(f), nm, +q, eTxt];
+      let fila = 0;
+      while(empty.length){
+        const cand = empty.shift(), chk = await gx(W+rng('A'+cand,'E'+cand)+'?$select=values', {headers:H}), v = (chk.values||[[]])[0];
+        if([v[0],v[2],v[3],v[4]].every(z=>z===''||z==null)){ fila = cand; break; }      // alguien la llenó a mano: se toma la siguiente
+      }
+      if(fila){
+        await gx(W+rng('A'+fila,'A'+fila), {method:'PATCH', headers:hj, body:JSON.stringify({values:[[row[0]]]})});
+        await gx(W+rng('C'+fila,'E'+fila), {method:'PATCH', headers:hj, body:JSON.stringify({values:[[row[1],row[2],row[3]]]})});
+      } else {
+        const r = await gx(W+"/tables('"+XL.table+"')/rows/add", {method:'POST', headers:hj, body:JSON.stringify({values:[[row[0], XL.B, row[1], row[2], row[3], '']]})});
+        fila = r && r.index!=null ? r.index+2 : 0; grown = true;
+      }
+      log.push({t:now, a:'escrita', fila, k});
+    }
+
+    // cambios en la app: filas manuales que entran como salidas, y salidas que se anulan
+    let appChanged = false;
+    toImport.forEach(x=>{ const [f,c,p,q] = x.k.split('|');
+      D.master.salidas.push({id:uid(), doc:p, f, c, q:+q, ts:now, u:XL.user}); log.push({t:now, a:'importada', fila:x.fila, k:x.k}); appChanged = true; });
+    toDrop.forEach(s=>{ D.master.del[s.id]=now; D.master.salidas=D.master.salidas.filter(m=>m.id!==s.id); log.push({t:now, a:'anulada', fila:0, k:xKey(s.f,xCode(s.c),xPisc(s.doc),s.q)}); appChanged = true; });
+    if(appChanged){ D.dirtyMaster = true; D.rev++; D.updated = new Date().toISOString(); }
+    derive(); persist();
+
+    await gx(W+'/closeSession', {method:'POST', headers:H}); H = null;
+    const fm2 = await graph(ip(XL.file)+'?$select=id,lastModifiedDateTime,cTag');
+    skipped.forEach(s=>{ const kk=s.k; base[kk]=(base[kk]||1)-1; if(!base[kk]) delete base[kk]; });
+    const A1 = appMulti(Z.corte), ids = {}; Object.keys(A1).forEach(k=>A1[k].forEach(s=>{ ids[s.id]=k; }));
+    Object.assign(Z, {base, ids, mod:fm2.lastModifiedDateTime, ctag:fm2.cTag, sigA:sigOf(A1), lock:null, last:Date.now(), err:'',
+      grown: Z.grown || grown || last>14469, filas:last, review:[...review, ...skipped.map(s=>({fila:0, motivo:s.motivo, txt:s.k.replace(/\|/g,' · ')}))],
+      stats:{escritas:(Z.stats.escritas||0)+toWrite.length-skipped.length, importadas:(Z.stats.importadas||0)+toImport.length, borradas:(Z.stats.borradas||0)+toClear.length, anuladas:(Z.stats.anuladas||0)+toDrop.length},
+      log:[...Z.log, ...log].slice(-300)});
+    await xlSaveState(Z, st.meta);
+    if(appChanged) await syncMaster(true);
+    if(manual) toast('Excel: '+(toWrite.length-skipped.length)+' escritas, '+toImport.length+' traídas, '+(toClear.length+toDrop.length)+' borradas');
+  }catch(e){
+    if(H){ try{ await graph(W+'/closeSession', {method:'POST', headers:H}); }catch(x){} }
+    try{ const s2 = await xlLoadState(); if(s2.z){ s2.z.err = 'Excel: '+e.message; s2.z.lock = null; await xlSaveState(s2.z, s2.meta); } }catch(x){}
+    if(manual) toast('Excel: '+e.message);
+  }finally{ xlBusy = false; }
+}
+async function xlActivate(){
+  if(!needAdmin()) return;
+  if(!navigator.onLine) return toast('Necesitas internet');
+  if(!confirm('Se guardará una copia de respaldo de '+XL.file+' y desde ahora las salidas desde el '+fdate(XL.corte)+' se sincronizarán con la hoja CONSUMO. ¿Continuar?')) return;
+  try{
+    const fm = await graph(ip(XL.file)+'?$select=id'); if(!fm) return toast('No se encontró '+XL.file);
+    const d = new Date(), stamp = todayISO()+' '+String(d.getHours()).padStart(2,'0')+String(d.getMinutes()).padStart(2,'0');
+    await graph(itemUrl(fm.id)+'/copy', {method:'POST', headers:J, raw:true, body:JSON.stringify({name:'NUBE respaldo '+stamp+'.xlsx'})});
+    const st = await xlLoadState(), z = st.z || sZ({}); z.on = true; z.corte = XL.corte; z.err = '';
+    await xlSaveState(z, st.meta); toast('Respaldo creado. Sincronizando con Excel…'); await excelSync(true); render();
+  }catch(e){ toast('No se pudo activar: '+e.message); }
+}
+async function xlPause(){
+  if(!needAdmin()) return; if(!confirm('¿Pausar la sincronización con Excel? No se borra nada.')) return;
+  try{ const st = await xlLoadState(); if(!st.z) return; st.z.on = false; st.z.lock = null; await xlSaveState(st.z, st.meta); render(); toast('Sincronización con Excel en pausa'); }catch(e){ toast(e.message); }
+}
+async function xlNow(){ await excelSync(true); render(); }
+function xlBlock(btn){
+  const z = xlLocal();
+  return `<div class="set-block"><h3>Hoja CONSUMO de ${esc(XL.file)}</h3>
+    <p style="font-size:14px">Cada salida desde el <b>${esc(fdate(XL.corte))}</b> (incluidas devoluciones, con PISCINA "N/A") se escribe sola en la hoja CONSUMO, y lo que se escriba a mano en esa hoja entra a la app como salida de <b>Archivo Excel (manual)</b>. Solo se llenan FECHA, NOMBRE, CANTIDAD y PISCINA; las fórmulas y las demás hojas no se tocan.</p>
+    ${z&&z.on?`<div class="info">Activa · última sincronización: <b>${z.last?esc(fdt(z.last)):'pendiente'}</b><br>
+      ${z.stats?`Escritas ${fmt(z.stats.escritas||0)} · traídas ${fmt(z.stats.importadas||0)} · borradas ${fmt((z.stats.borradas||0)+(z.stats.anuladas||0))}`:''}</div>
+      ${z.err?`<div class="info bad" style="margin-top:8px">${esc(z.err)}</div>`:''}
+      ${z.grown?`<div class="info bad" style="margin-top:8px">La tabla CONSUMO ya pasa la fila 14469: si la tabla dinámica todavía usa el rango fijo A1:F14469, cambie su origen a <b>CONSUMO</b>.</div>`:''}
+      ${z.filas>=19900?`<div class="info bad" style="margin-top:8px">La tabla llega a la fila ${fmt(z.filas)}: HOJA DIARIA solo lee hasta la 19988.</div>`:''}
+      ${z.review&&z.review.length?`<div class="info bad" style="margin-top:8px"><b>${z.review.length} fila(s) del Excel por revisar</b> (no se pasaron a la app):<br>${z.review.slice(0,20).map(r=>(r.fila?'Fila '+r.fila+': ':'')+esc(r.motivo)+' — '+esc(r.txt)).join('<br>')}</div>`:''}
+      <div class="stack" style="margin-top:10px"><button class="btn primary" onclick="xlNow()">Sincronizar Excel ahora</button>
+      <button class="btn ghost" onclick="xlPause()">Pausar</button></div>`
+    :`<div class="stack"><button class="btn primary" onclick="xlActivate()">Activar sincronización con Excel</button></div>
+      <p style="font-size:13px;color:var(--muted);margin-top:8px">Antes de activar se guarda una copia de respaldo del archivo en la misma carpeta.</p>`}</div>`;
 }
 /* ---------- administración de usuarios (solo administrador) ---------- */
 async function ensureRegDir(){

@@ -723,6 +723,22 @@ function consumoDestinos(rd, rh, filtro){
 const sumMap = o => Object.values(o||{}).reduce((a,b)=>a+b,0);
 function porUnidad(o){ const u={}; Object.entries(o||{}).forEach(([c,q])=>{ const k=pUnit(c)||'UND'; u[k]=(u[k]||0)+q; });
   const s = Object.entries(u).filter(([k,q])=>Math.abs(q)>1e-9).map(([k,q])=>fmt(Math.round(q*100)/100)+' '+k).join(' · '); return s || '—'; }
+/* libras por unidad: balanceado = saco de 55 lb (25 kg); otros sacos según el peso del nombre; KG → lb; litros no se convierten */
+const KG_LB = 2.20462;
+function lbPer(c){
+  const u = pUnit(c), n = pName(c).toUpperCase().replace(',', '.');
+  if(u==='KG') return KG_LB;
+  if(u!=='SC') return 0;
+  const lb = n.match(/(\d+(?:\.\d+)?)\s*LBS?\b/); if(lb) return +lb[1];
+  if(esBal(c)) return 55;
+  const kg = n.match(/(\d+(?:\.\d+)?)\s*KG/); return kg ? +kg[1]*KG_LB : 0;
+}
+function enLibras(o){   // "12.345 lb" + lo que no se puede pasar a libras (litros, sacos sin peso)
+  let lb = 0; const resto = {};
+  Object.entries(o||{}).forEach(([c,q])=>{ const k=lbPer(c); if(k) lb += q*k; else resto[c]=q; });
+  const parts = []; if(Math.abs(lb)>1e-9) parts.push(fmt(Math.round(lb*100)/100)+' lb');
+  const r = porUnidad(resto); if(r!=='—') parts.push(r); return parts.join(' · ') || '—';
+}
 const addMaps = (...ms) => { const r={}; ms.forEach(m=>Object.entries(m||{}).forEach(([c,q])=>r[c]=(r[c]||0)+q)); return r; };
 function firstOfMonth(){ const d=todayISO(); return d.slice(0,8)+'01'; }
 ui.cp = ui.cp || {desde:firstOfMonth(), hasta:todayISO(), filtro:'todos', sel:''};
@@ -740,11 +756,11 @@ function showCP(){
       <div class="field"><label>Hasta</label><input type="date" value="${esc(c.hasta)}" onchange="cpSet('hasta',this.value)"></div></div>
     <div class="seg" style="margin:4px 0 10px;grid-template-columns:1fr 1fr 1fr">${[['todos','Todo'],['bal','Balanceado'],['ins','Insumos']].map(([k,l])=>`<button class="${c.filtro===k?'on':''}" onclick="cpSet('filtro','${k}')">${l}</button>`).join('')}</div>
     <div class="info" style="margin:0 0 8px">Total consumido en el período: <b>${esc(porUnidad(totAll))}</b>${aplic.length?` · ${aplic.length} traspaso(s) aplicado(s)`:''}</div>
-    <div class="tblwrap" style="max-height:420px"><table class="tbl"><tr><th>Destino</th><th class="n">Consumo directo</th><th class="n">Recibido</th><th class="n">Transferido</th><th class="n">Acumulado</th></tr>
+    <div class="tblwrap" style="max-height:420px"><table class="tbl"><tr><th>Destino</th><th class="n">Consumo directo</th><th class="n">Recibido</th><th class="n">Transferido</th><th class="n">Acumulado (lb)</th></tr>
       ${docs.map(d=>{ const r=R[d]; const acum=addMaps(r.dir,r.rec); return `<tr style="cursor:pointer;${c.sel===d?'background:var(--brand-soft)':''}" onclick="cpSet('sel',${jsa(c.sel===d?'':d)})">
         <td><b>${esc(docLab(d)||d)}</b></td><td class="n">${esc(porUnidad(r.dir))}</td><td class="n">${sumMap(r.rec)?esc(porUnidad(r.rec)):'—'}</td>
-        <td class="n">${sumMap(r.out)?'−'+esc(porUnidad(r.out)):'—'}</td><td class="n"><b>${esc(porUnidad(acum))}</b></td></tr>`; }).join('') || '<tr><td colspan="5" class="empty">Sin consumos en el período.</td></tr>'}</table></div>
-    <p style="font-size:12px;color:var(--muted);margin:6px 0">Toca un destino para ver el detalle por producto. Acumulado = consumo directo + recibido por traspasos (lo transferido ya no se cuenta en el origen).</p>
+        <td class="n">${sumMap(r.out)?'−'+esc(porUnidad(r.out)):'—'}</td><td class="n"><b>${esc(enLibras(acum))}</b></td></tr>`; }).join('') || '<tr><td colspan="5" class="empty">Sin consumos en el período.</td></tr>'}</table></div>
+    <p style="font-size:12px;color:var(--muted);margin:6px 0">Toca un destino para ver el detalle por producto. Acumulado = consumo directo + recibido por traspasos (lo transferido ya no se cuenta en el origen), en libras: balanceado 55 lb por saco; otros sacos según su peso; kilos × 2,2046; los litros quedan en litros.</p>
     ${sel?cpDetalle(sel):''}
     <h3 style="font-size:15px;margin-top:12px">Traspasos registrados (${trs.length})</h3>
     <div class="tblwrap"><table class="tbl"><tr><th>Fecha</th><th>Origen → destinos</th><th>Consumo del período</th><th>Por</th><th></th></tr>
@@ -758,8 +774,8 @@ function showCP(){
 function cpDetalle(r){
   const prods = [...new Set([...Object.keys(r.dir),...Object.keys(r.rec),...Object.keys(r.out)])].sort((a,b)=>pName(a).localeCompare(pName(b),'es'));
   return `<h3 style="font-size:15px;margin-top:10px">Detalle: ${esc(docLab(r.doc)||r.doc)}</h3>
-    <div class="tblwrap"><table class="tbl"><tr><th>Producto</th><th class="n">Directo</th><th class="n">Recibido</th><th class="n">Transferido</th><th class="n">Acumulado</th></tr>
-    ${prods.map(cd=>{ const a=(r.dir[cd]||0)+(r.rec[cd]||0), u=' '+esc(pUnit(cd)), f=v=>v?fmt(Math.round(v*100)/100)+u:'—'; return `<tr><td>${esc(pName(cd))}<br><span style="color:var(--muted)">${esc(cd)}</span></td><td class="n">${f(r.dir[cd])}</td><td class="n">${f(r.rec[cd])}</td><td class="n">${r.out[cd]?'−'+f(r.out[cd]):'—'}</td><td class="n"><b>${f(a)}</b></td></tr>`; }).join('')}</table></div>
+    <div class="tblwrap"><table class="tbl"><tr><th>Producto</th><th class="n">Directo</th><th class="n">Recibido</th><th class="n">Transferido</th><th class="n">Acumulado (lb)</th></tr>
+    ${prods.map(cd=>{ const a=(r.dir[cd]||0)+(r.rec[cd]||0), u=' '+esc(pUnit(cd)), f=v=>v?fmt(Math.round(v*100)/100)+u:'—'; return `<tr><td>${esc(pName(cd))}<br><span style="color:var(--muted)">${esc(cd)}</span></td><td class="n">${f(r.dir[cd])}</td><td class="n">${f(r.rec[cd])}</td><td class="n">${r.out[cd]?'−'+f(r.out[cd]):'—'}</td><td class="n"><b>${a?esc(enLibras({[cd]:a})):'—'}</b></td></tr>`; }).join('')}</table></div>
     ${Object.keys(r.from).length?`<p style="font-size:13px;color:var(--muted)">Recibido de: ${Object.entries(r.from).map(([k,m])=>'<b>'+esc(k.split(' → ').map(x=>docLab(x)||x).join(' → '))+'</b> ('+esc(porUnidad(m))+')').join(' · ')}</p>`:''}`;
 }
 let tras = null;
@@ -812,13 +828,13 @@ function delTras(id){
 async function exportCP(){
   try{ await loadXLSX(); const c=ui.cp, {R}=consumoDestinos(c.desde,c.hasta,c.filtro), docs=Object.keys(R).sort(docSort);
     const rows=[['CONSUMO POR PISCINA / PRECRÍA'],['Desde',c.desde,'Hasta',c.hasta,'Filtro',{todos:'Todo',bal:'Balanceado',ins:'Insumos'}[c.filtro]],[],
-      ['Destino','Código','Producto','Medida','Consumo directo','Recibido por traspaso','Transferido a otras','Acumulado']];
+      ['Destino','Código','Producto','Medida','Consumo directo','Recibido por traspaso','Transferido a otras','Acumulado','Acumulado (lb)']];
     docs.forEach(d=>{ const r=R[d]; [...new Set([...Object.keys(r.dir),...Object.keys(r.rec),...Object.keys(r.out)])].sort((a,b)=>pName(a).localeCompare(pName(b),'es')).forEach(cd=>{
-      const rd=x=>Math.round((x||0)*100)/100; rows.push([docLab(d)||d, cd, pName(cd), pUnit(cd), rd(r.dir[cd]), rd(r.rec[cd]), rd(r.out[cd]), rd((r.dir[cd]||0)+(r.rec[cd]||0))]); }); });
+      const rd=x=>Math.round((x||0)*100)/100; rows.push([docLab(d)||d, cd, pName(cd), pUnit(cd), rd(r.dir[cd]), rd(r.rec[cd]), rd(r.out[cd]), rd((r.dir[cd]||0)+(r.rec[cd]||0)), lbPer(cd)?rd(((r.dir[cd]||0)+(r.rec[cd]||0))*lbPer(cd)):'']); }); });
     const tr=[['Fecha traspaso','Origen','Consumo desde','Consumo hasta','Destinos (%)','Nota','Registrado por']];
     S.traspasos.slice().sort((a,b)=>a.fecha.localeCompare(b.fecha)).forEach(x=>tr.push([x.fecha, docLab(x.origen)||x.origen, x.desde, x.hasta, x.dest.map(d=>(docLab(d.doc)||d.doc)+' '+(Math.round(d.pct*100)/100)+'%').join(', '), x.nota, userName(x.u)]));
     const wb=XLSX.utils.book_new(), sh=(r,w,n)=>{ const ws=XLSX.utils.aoa_to_sheet(r); ws['!cols']=w.map(x=>({wch:x})); XLSX.utils.book_append_sheet(wb,ws,n); };
-    sh(rows,[14,10,48,8,15,18,18,12],'Por piscina'); sh(tr,[14,12,13,13,50,30,20],'Traspasos');
+    sh(rows,[14,10,48,8,15,18,18,12,14],'Por piscina'); sh(tr,[14,12,13,13,50,30,20],'Traspasos');
     XLSX.writeFile(wb,'Consumo_por_piscina_'+c.desde+'_a_'+c.hasta+'.xlsx'); toast('Excel generado');
   }catch(e){ toast(e.message); }
 }
@@ -1303,7 +1319,7 @@ async function autoSync(manual){
    última sincronización (base): solo se copia lo que cambió, y lo que aparece en ambos lados se une.
    En la hoja CONSUMO se escriben solo A (FECHA), C (NOMBRE), D (CANTIDAD) y E (PISCINA).          */
 const XL = {file:'NUBE.xlsx', table:'CONSUMO', sheet:'CONSUMO', codigos:'CODIGO', state:'sync-consumo-nube.json',
-  corte:'2026-11-10', user:'excel@nube.xlsx', B:"=VLOOKUP([@NOMBRE],CODIGOS!$B$2:$C$1100,2,FALSE)"};
+  corte:'2026-11-09', user:'excel@nube.xlsx', B:"=VLOOKUP([@NOMBRE],CODIGOS!$B$2:$C$1100,2,FALSE)"};
 const XL_KEY = 'inv_gambirasi_xl';
 const xlLocal = () => { try{ return JSON.parse(localStorage.getItem(XL_KEY)||'null'); }catch(e){ return null; } };
 const xlSetLocal = z => { try{ localStorage.setItem(XL_KEY, JSON.stringify(z)); }catch(e){} };
@@ -1352,6 +1368,7 @@ async function excelSync(manual){
   try{
     st = await xlLoadState(); let Z = st.z;
     if(!Z || !Z.on){ if(Z) xlSetLocal(Z); return; }
+    if(Z.corte!==XL.corte){ Z.corte = XL.corte; Z.inicio = 0; }                    // el corte cambió: se vuelve a ubicar la primera fila
     const fm = await graph(ip(XL.file)+'?$select=id,lastModifiedDateTime,cTag');
     if(!fm){ Z.err = 'No se encontró '+XL.file+' en la carpeta de la app.'; await xlSaveState(Z, st.meta); return; }
     const A0 = appMulti(Z.corte), sigA = sigOf(A0);

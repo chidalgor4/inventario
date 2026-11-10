@@ -1,6 +1,6 @@
 /* Service worker: permite abrir la app sin señal.
    Cambia VERSION cada vez que subas un index.html nuevo. */
-const VERSION = 'inv-v17';
+const VERSION = 'inv-v18';
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './xlsx.full.min.js', './jspdf.umd.min.js', './jspdf.plugin.autotable.min.js', './logo.png'];
 
 self.addEventListener('install', e => {

@@ -5,24 +5,36 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; manifest-src 'self'; worker-src 'self'; connect-src 'self' https://login.microsoftonline.com https://graph.microsoft.com https://*.sharepoint.com https://*.1drv.com https://*.live.com https://*.onedrive.com https://*.microsoftpersonalcontent.com; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0f766e">
+<meta name="theme-color" content="#0e3461">
+<script>try{var t=localStorage.getItem("inv_theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t);}catch(e){}</script>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <title>Inventario Gambirasi</title>
 <style>
-:root{
-  --bg:#f3f6f6; --card:#ffffff; --ink:#12201f; --muted:#5d6f6d; --line:#dfe7e6;
-  --brand:#0f766e; --brand-ink:#ffffff; --brand-soft:#d9f0ec;
-  --ok:#15803d; --ok-soft:#dcf5e3; --warn:#b45309; --warn-soft:#fdecc8; --bad:#b91c1c; --bad-soft:#fde1e1;
-  --in:#0f766e; --out:#c2410c; --shadow:0 1px 2px rgba(18,32,31,.06),0 4px 14px rgba(18,32,31,.06);
+:root{color-scheme:light;
+  --bg:#f2f6fa; --card:#ffffff; --ink:#0e2340; --muted:#4e6078; --line:#d7e2ec;
+  --brand:#137672; --brand-ink:#ffffff; --brand-soft:#dcefee;
+  --ok:#15803d; --ok-soft:#dcf5e3; --warn:#9a5b00; --warn-soft:#fdecc8; --bad:#b42318; --bad-soft:#fde7e4;
+  --in:#137672; --out:#c2511f; --out-ink:#ffffff; --shadow:0 1px 2px rgba(14,35,64,.06),0 4px 14px rgba(14,35,64,.06);
+  --hdr:#0e3461; --hdr-ink:#ffffff; --hdr-muted:#b4dcec; --hdr-chip:rgba(255,255,255,.12); --hdr-line:rgba(255,255,255,.25); --bar:#1e9690;
+  --kpi:#0e3461; --ghost-ink:#0e3461; --nav-on:#0e3461; --fab:#0e3461; --fab-ink:#ffffff; --fab-shadow:rgba(14,52,97,.35);
 }
-@media (prefers-color-scheme:dark){
-  :root{
-    --bg:#0d1514; --card:#16211f; --ink:#e8f1ef; --muted:#9bb0ad; --line:#26332f;
-    --brand:#2dd4bf; --brand-ink:#04211d; --brand-soft:#12332f;
-    --ok:#4ade80; --ok-soft:#12301c; --warn:#fbbf24; --warn-soft:#37290c; --bad:#f87171; --bad-soft:#3a1616;
-    --in:#2dd4bf; --out:#fb923c; --shadow:none;
-  }
+/* Tema: Automático sigue al teléfono/computadora; Claro u Oscuro se eligen en Ajustes (colores Acuarios del Golfo) */
+@media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){color-scheme:dark;
+  --bg:#111418; --card:#1b2027; --ink:#eceff3; --muted:#a3acb9; --line:#2a313b;
+  --brand:#1fa39c; --brand-ink:#032321; --brand-soft:#16302f;
+  --ok:#4ade80; --ok-soft:#12301c; --warn:#ffc56b; --warn-soft:#3a2e14; --bad:#ff8a80; --bad-soft:#3a1f24;
+  --in:#1fa39c; --out:#e8763f; --out-ink:#1e0900; --shadow:none;
+  --hdr:#0e3461; --hdr-ink:#ffffff; --hdr-muted:#b4dcec; --hdr-chip:rgba(255,255,255,.10); --hdr-line:rgba(255,255,255,.22); --bar:#e8763f;
+  --kpi:#9ed3e6; --ghost-ink:#9ed3e6; --nav-on:#9ed3e6; --fab:#e8763f; --fab-ink:#1e0900; --fab-shadow:rgba(0,0,0,.45);
+} }
+:root[data-theme="dark"]{color-scheme:dark;
+  --bg:#111418; --card:#1b2027; --ink:#eceff3; --muted:#a3acb9; --line:#2a313b;
+  --brand:#1fa39c; --brand-ink:#032321; --brand-soft:#16302f;
+  --ok:#4ade80; --ok-soft:#12301c; --warn:#ffc56b; --warn-soft:#3a2e14; --bad:#ff8a80; --bad-soft:#3a1f24;
+  --in:#1fa39c; --out:#e8763f; --out-ink:#1e0900; --shadow:none;
+  --hdr:#0e3461; --hdr-ink:#ffffff; --hdr-muted:#b4dcec; --hdr-chip:rgba(255,255,255,.10); --hdr-line:rgba(255,255,255,.22); --bar:#e8763f;
+  --kpi:#9ed3e6; --ghost-ink:#9ed3e6; --nav-on:#9ed3e6; --fab:#e8763f; --fab-ink:#1e0900; --fab-shadow:rgba(0,0,0,.45);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%}
@@ -30,16 +42,19 @@ body{background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system
 #app{max-width:680px;margin:0 auto;min-height:100%;padding:0 14px calc(92px + env(safe-area-inset-bottom,0px));padding-top:env(safe-area-inset-top,0px)}
 h1,h2,h3{margin:0}
 button,input,select{font:inherit;color:inherit}
-.top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:18px 2px 10px}
+.top{display:flex;align-items:center;gap:12px;margin:0 -14px 14px;padding:18px 16px 18px;background:var(--hdr);color:var(--hdr-ink);border-bottom:4px solid var(--bar)}
+.top::before{content:"";flex:none;width:48px;height:48px;border-radius:14px;background:#fff url(logo-ag.png) center/42px auto no-repeat}
+.top>div:first-child{flex:1;min-width:0}
 .top h1{font-size:22px;letter-spacing:-.3px}
-.top small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
+.top small{display:block;color:var(--hdr-muted);font-size:13px;margin-top:2px}
+.top .chip-sync{background:var(--hdr-chip);border-color:var(--hdr-line);color:var(--hdr-ink)}
 .chip-sync{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:6px 10px;border-radius:99px;background:var(--card);border:1px solid var(--line);color:var(--muted);white-space:nowrap}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
 .dot.on{background:var(--ok)} .dot.warn{background:var(--warn)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .kpi{padding:14px}
-.kpi b{display:block;font-size:28px;letter-spacing:-.5px;line-height:1.1}
+.kpi b{display:block;font-size:28px;letter-spacing:-.5px;line-height:1.1;color:var(--kpi)}
 .kpi span{font-size:13px;color:var(--muted)}
 .kpi.tap{cursor:pointer}
 .kpi.bad b{color:var(--bad)} .kpi.warn b{color:var(--warn)}
@@ -50,8 +65,8 @@ button,input,select{font:inherit;color:inherit}
 .btn{border:0;border-radius:14px;padding:14px 16px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:50px}
 .btn.primary{background:var(--brand);color:var(--brand-ink)}
 .btn.in{background:var(--in);color:var(--brand-ink)}
-.btn.out{background:var(--out);color:#fff}
-.btn.ghost{background:var(--card);border:1px solid var(--line)}
+.btn.out{background:var(--out);color:var(--out-ink)}
+.btn.ghost{background:var(--card);border:1px solid var(--line);color:var(--ghost-ink)}
 .btn.danger{background:var(--bad-soft);color:var(--bad)}
 .btn.full{width:100%}
 .btn:disabled{opacity:.5}
@@ -83,10 +98,10 @@ button,input,select{font:inherit;color:inherit}
 nav{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--card);border-top:1px solid var(--line);padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px))}
 nav .in-nav{max-width:680px;margin:0 auto;display:grid;grid-template-columns:repeat(5,1fr);gap:2px}
 nav button{background:none;border:0;display:flex;flex-direction:column;align-items:center;gap:3px;padding:7px 2px;color:var(--muted);font-size:11px;font-weight:600;border-radius:12px;cursor:pointer}
-nav button.on{color:var(--brand)}
+nav button.on{color:var(--nav-on)}
 nav button svg{width:24px;height:24px}
-nav button.add{color:var(--brand-ink)}
-nav button.add span.fab{background:var(--brand);width:48px;height:48px;border-radius:16px;display:grid;place-items:center;margin-top:-20px;box-shadow:0 6px 16px rgba(15,118,110,.4)}
+nav button.add{color:var(--fab-ink)}
+nav button.add span.fab{background:var(--fab);width:48px;height:48px;border-radius:16px;display:grid;place-items:center;margin-top:-20px;box-shadow:0 6px 16px var(--fab-shadow)}
 nav button.add svg{width:26px;height:26px}
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:40;display:none}
 .scrim.show{display:block}
@@ -575,6 +590,9 @@ function clearCount(){ if(!needAdmin()) return; if(!confirm('¿Borrar todo el co
 /* ---------- vista: Ajustes / OneDrive ---------- */
 function od(){ try{ const o = JSON.parse(localStorage.getItem(KEY_OD)||'{}'); o.clientId = ONEDRIVE_CLIENT_ID; o.redirectUri = location.origin+location.pathname; return o; }catch(e){ return {clientId:ONEDRIVE_CLIENT_ID, redirectUri:location.origin+location.pathname}; } }
 function odSet(p){ const o = Object.assign(od(), p); try{ localStorage.setItem(KEY_OD, JSON.stringify(o)); }catch(e){} return o; }
+function themeGet(){ try{ const t=localStorage.getItem('inv_theme'); return t==='light'||t==='dark'?t:'auto'; }catch(e){ return 'auto'; } }
+function themeSet(t){ try{ if(t==='auto') localStorage.removeItem('inv_theme'); else localStorage.setItem('inv_theme',t); }catch(e){}
+  if(t==='auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme',t); render(); }
 function vSet(){
   const o = od(), on = !!o.token, adm = isAdmin();
   const btn = 'min-height:38px;padding:6px 12px;font-size:14px';
@@ -602,6 +620,9 @@ function vSet(){
         <button class="btn ghost" onclick="exportXLSX()">Exportar a Excel (.xlsx)</button>
         ${adm?'<button class="btn ghost" onclick="odPushXLSX()">Guardar Excel en OneDrive</button><button class="btn ghost" onclick="importFile()">Importar desde Excel (.xlsx / .xlsm)</button>':''}
       </div></div>
+    <div class="set-block"><h3>Apariencia</h3>
+      <p style="font-size:14px">Colores de Acuarios del Golfo. "Automático" usa el modo claro u oscuro del teléfono o la computadora.</p>
+      <div class="seg" style="grid-template-columns:1fr 1fr 1fr">${[['auto','Automático'],['light','Claro'],['dark','Oscuro']].map(([k,l])=>`<button class="${themeGet()===k?'on':''}" onclick="themeSet('${k}')">${l}</button>`).join('')}</div></div>
     <div class="set-block"><h3>Datos</h3>
       <p>${S.productos.length} productos · ${S.entradas.length} entradas · ${S.salidas.length} salidas${pending()?'<br><b>Hay cambios de este equipo pendientes de subir.</b>':''}</p></div>
   </div>`;
@@ -871,7 +892,7 @@ async function pdfEmpresa(titulo, fechaTxt, sub){   // encabezado tipo "DESPACHO
 async function pdfNew(titulo, sub){
   await loadPDF();
   const doc = new window.jspdf.jsPDF({unit:'pt', format:'a4'}), W = doc.internal.pageSize.getWidth();
-  doc.setFillColor(15,118,110); doc.rect(0,0,W,58,'F');
+  doc.setFillColor(14,52,97); doc.rect(0,0,W,58,'F');
   doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(16); doc.text(pdfTxt(titulo), 40, 30);
   doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.text('GAMBIRASI - Bodega', 40, 46);
   doc.setTextColor(60,72,70); doc.setFontSize(9.5);
@@ -885,7 +906,7 @@ function pdfFin(doc, nombre){
     doc.text('Inventario GAMBIRASI - '+pdfTxt(fdt(Date.now())), 40, H-20); doc.text('Página '+i+' de '+n, W-40, H-20, {align:'right'}); }
   doc.save(nombre); toast('PDF descargado: '+nombre);
 }
-const tblStyle = {styles:{font:'helvetica', fontSize:8.5, cellPadding:4, textColor:[18,32,31]}, headStyles:{fillColor:[15,118,110], textColor:255, fontStyle:'bold'},
+const tblStyle = {styles:{font:'helvetica', fontSize:8.5, cellPadding:4, textColor:[18,32,31]}, headStyles:{fillColor:[14,52,97], textColor:255, fontStyle:'bold'},
   alternateRowStyles:{fillColor:[245,248,248]}, margin:{left:40, right:40, bottom:40}};
 async function pdfSaldos(){
   try{

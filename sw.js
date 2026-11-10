@@ -1,7 +1,7 @@
 /* Service worker: permite abrir la app sin señal.
    Cambia VERSION cada vez que subas un index.html nuevo. */
-const VERSION = 'inv-v19';
-const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './xlsx.full.min.js', './jspdf.umd.min.js', './jspdf.plugin.autotable.min.js', './logo.png'];
+const VERSION = 'inv-v20';
+const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './xlsx.full.min.js', './jspdf.umd.min.js', './jspdf.plugin.autotable.min.js', './logo.png', './logo-ag.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(async c => {

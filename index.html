@@ -934,6 +934,105 @@ function consumoRep(c){
   return {docs:Object.keys(per).sort(docSort).map(d=>({doc:d, items:Object.entries(per[d]).filter(([k,q])=>q>1e-9).sort((a,b)=>pName(a[0]).localeCompare(pName(b[0]),'es'))}))};
 }
 function repSub(c){ return ['Del '+fdate(c.desde)+' al '+fdate(c.hasta)+' · '+tipoLab(c.filtro)+(c.por==='prod'&&c.doc?' · Solo '+(docLab(c.doc)||c.doc):'')+(c.por==='pisc'?(c.tras?' · Con traspasos aplicados':' · Sin traspasos (consumo directo)'):'')]; }
+/* ---------- Reporte de consumos diarios con el formato de la hoja CORREO de NUBE.xlsx ----------
+   Filas fijas: PSC 1..20, 9B y PRE01..PRE11 (igual que CORREO). Columnas: solo los productos que
+   tuvieron salidas en la fecha elegida, en el mismo orden de la hoja CORREO; los demás se eliminan. */
+const CORREO_ORDEN = ['00577','03351','03473','00743','03567','03518','03521','00651','00653','00759','00670','02919','03397','00394','00475','02448','00585','03328','03236','00400','00643','00506','00239','03235','03214','03329','00707','00403','00476','00273','02949','00494','03326','00308','03358'];
+const CORREO_FIRMAS = [['Revisado por :','YEISON RODRIGUEZ','Producción'],['Aprobado por:','DIEGO TORRES','Administración'],['Recibido por:','KERLY MALDONADO','Contabilidad']];
+ui.cr = ui.cr || {fecha: todayISO()};
+function codigosXL(){ try{ return JSON.parse(localStorage.getItem('inv_codigos')||'{}')||{}; }catch(e){ return {}; } }
+function correoDatos(fecha){
+  const M = {}, filas = [...PSC, ...PRE];
+  S.salidas.forEach(s=>{ if(s.f!==fecha || !(s.q>0)) return; const d = xPisc(s.doc); if(!filas.includes(d)) return;
+    const c = xCode(s.c); (M[d]=M[d]||{})[c] = (M[d][c]||0) + s.q; });
+  const set = new Set(); Object.values(M).forEach(o=>Object.keys(o).forEach(c=>set.add(c)));
+  const ord = c => { const i = CORREO_ORDEN.indexOf(c); return i<0 ? 999 : i; };
+  const codes = [...set].sort((a,b)=>ord(a)-ord(b) || pName(a).localeCompare(pName(b),'es'));
+  const otros = S.salidas.filter(s=>s.f===fecha && s.q>0 && !filas.includes(xPisc(s.doc))).length;
+  return {M, codes, filas, otros};
+}
+const corNum = (v,d) => (Math.round(v*Math.pow(10,d))/Math.pow(10,d)).toFixed(d).replace('.',',').replace(/\B(?=(\d{3})+(?!\d))/g,'.');
+async function imgData(src){ try{ const b = await (await fetch(src)).blob(); return await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(b); }); }catch(e){ return null; } }
+function elaboradoPor(){ const n = (od().name||'').trim(); return (n || userName(me()) || '').toUpperCase(); }
+async function pdfCorreo(){
+  const fecha = ui.cr.fecha; if(!RX_DT.test(fecha||'')) return toast('Elige una fecha');
+  const {M, codes, filas, otros} = correoDatos(fecha);
+  if(!codes.length) return toast('No hay salidas a piscinas o precrías el '+fdate(fecha));
+  try{ await loadPDF(); }catch(e){ return toast(e.message); }
+  const [icon, txt] = await Promise.all([imgData('logo-icon.png'), imgData('logo-txt.png')]);
+  const doc = new window.jspdf.jsPDF({unit:'pt', format:'a4', orientation:'landscape'}), W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+  const NAVY=[16,72,97], RED=[255,0,0], BLUE=[0,112,192], PURPLE=[160,43,147], GREEN=[60,125,34], GRID=[200,200,200], m=18;
+  const T = (s,x,y,o) => doc.text(pdfTxt(s), x, y, o||{});
+  const font = (st,sz,col) => { doc.setFont(st==='times'?'times':'helvetica', st==='times'?'bold':st); doc.setFontSize(sz); doc.setTextColor(...(col||[0,0,0])); };
+  // encabezado: logos | título | código del formato
+  doc.setDrawColor(...NAVY); doc.setLineWidth(1);
+  doc.roundedRect(m, m, 178, 60, 8, 8);
+  if(icon) doc.addImage(icon, 'PNG', m+8, m+8, 76, 35);
+  if(txt) doc.addImage(txt, 'PNG', m+90, m+12, 82, 33);
+  const cx0 = m+188, cx1 = W-m-198;
+  doc.roundedRect(cx0, m, cx1-cx0, 60, 8, 8);
+  font('bold',15,NAVY); T('GAMBIRASI SA', (cx0+cx1)/2, m+19, {align:'center'});
+  font('bold',10.5,NAVY); T('SISTEMA DE GESTIÓN DE TRAZABILIDAD', (cx0+cx1)/2, m+34, {align:'center'});
+  font('bold',13,[0,0,0]); T('REPORTE DE CONSUMOS DIARIOS', (cx0+cx1)/2, m+52, {align:'center'});
+  doc.roundedRect(W-m-190, m, 190, 34, 6, 6); doc.roundedRect(W-m-190, m+40, 190, 20, 6, 6);
+  font('bold',9.5); T('CODIGO :  SG/PRO/ F-07', W-m-95, m+14, {align:'center'}); T('VERSION:  02', W-m-95, m+27, {align:'center'});
+  T('APROBADA: JULIO 2022', W-m-95, m+54, {align:'center'});
+  // No., fecha y especie
+  let y = m+80;
+  font('normal',11); T('No.', m+40, y+4);
+  font('bold',18,RED); T(String(xSerial(fecha)+1-44076), m+64, y+6);
+  const largo = new Date(fecha+'T12:00:00').toLocaleDateString('es-EC',{weekday:'long', day:'numeric', month:'long', year:'numeric'});
+  font('bold',10.5,NAVY); T('Fecha:', m+180, y+4, {align:'right'}); font('bold',10.5); T(largo, m+188, y+4);
+  font('times',15,NAVY); T('Especie Litopenaeus Vannamei', W-m, y+5, {align:'right'});
+  // tabla
+  y += 16;
+  const n = codes.length, wA = 16, wB = 32, wT = 38, avail = W-2*m-wA-wB-wT, cw = Math.min(44, avail/n);
+  const tw = wA+wB+n*cw+wT, x0 = m + (W-2*m-tw)/2, xB = x0+wA, xC = xB+wB, xT = xC+n*cw;
+  const hName = 122, hU = 10, hC = 10, foot = 50, rows = filas.length+1;
+  const rh = Math.min(12, (H-m-foot-(y+hName+hU+hC))/rows);
+  const yU = y+hName, yC = yU+hU, yR = yC+hC, yEnd = yR+rows*rh;
+  // nombres de productos (vertical), unidad y código
+  font('bold',6.5,RED); ['DETALLE','DE','INSUMOS'].forEach((w,i)=>T(w, xB+wB/2, yU-24+i*8, {align:'center'}));
+  codes.forEach((c,i)=>{
+    const x = xC+i*cw, name = codigosXL()[c] || pName(c);
+    font('bold',7.2,BLUE); const lines = doc.splitTextToSize(pdfTxt(name), hName-6).slice(0,3);
+    const lh = 8, start = x + cw/2 - (lines.length-1)*lh/2 + 2.6;
+    lines.forEach((l,j)=>doc.text(l, start + j*lh, yU-3, {angle:90}));
+    font('bold',6.5,PURPLE); T(pUnit(c), x+cw/2, yU+7.5, {align:'center'});
+    font('bold',7); T(String(+c||c), x+cw/2, yC+7.5, {align:'center'});
+  });
+  font('normal',7); T('COD.', xB+wB/2, yC+7.5, {align:'center'});
+  // cuerpo
+  const colTot = new Array(n).fill(0); let gran = 0;
+  filas.forEach((d,r)=>{
+    const yy = yR + r*rh, lab = PSC.includes(d) ? String(d).replace(/^0/,'') : d, row = M[d]||{}; let tot = 0;
+    font('bold', PSC.includes(d)?8:6.5, GREEN); T(lab, xB+wB/2, yy+rh/2+2.6, {align:'center'});
+    codes.forEach((c,i)=>{ const v = row[c]||0; if(v){ tot+=v; colTot[i]+=v; font('bold',7.2); T(corNum(v,2), xC+i*cw+cw/2, yy+rh/2+2.5, {align:'center'}); } });
+    gran += tot; font('bold',7.2); T(corNum(tot,1), xT+wT/2, yy+rh/2+2.5, {align:'center'});
+  });
+  const yTot = yR + filas.length*rh;
+  font('normal',7.5); T('total', xB+wB/2, yTot+rh/2+2.6, {align:'center'});
+  colTot.forEach((v,i)=>T(corNum(v,1), xC+i*cw+cw/2, yTot+rh/2+2.6, {align:'center'}));
+  font('bold',7.5); T(corNum(gran,1), xT+wT/2, yTot+rh/2+2.6, {align:'center'});
+  // PISCINA / PRECRIADERO (vertical, combinadas)
+  const yPre = yR + PSC.length*rh;
+  font('bold',8,NAVY); doc.text('PISCINA', x0+wA/2+3, (yR+yPre)/2+doc.getTextWidth('PISCINA')/2, {angle:90});
+  font('bold',6.5,NAVY); doc.text('PRECRIADERO', x0+wA/2+2.5, (yPre+yTot)/2+doc.getTextWidth('PRECRIADERO')/2, {angle:90});
+  // líneas de la tabla
+  doc.setDrawColor(...GRID); doc.setLineWidth(0.3);
+  [y, yU, yC, yR].forEach(v=>doc.line(xB, v, xT+wT, v));
+  for(let r=1;r<=rows;r++) doc.line(xB, yR+r*rh, xT+wT, yR+r*rh);
+  [xB, ...codes.map((_,i)=>xC+i*cw), xT, xT+wT].forEach(v=>doc.line(v, y, v, yEnd));
+  doc.line(x0, yR, x0, yTot); doc.line(x0, yR, xB, yR); doc.line(x0, yPre, xB, yPre); doc.line(x0, yTot, xB, yTot);
+  doc.setDrawColor(0,0,0); doc.setLineWidth(0.6); doc.line(xB, yTot, xT+wT, yTot);
+  // firmas
+  const firmas = [['Elaborado por:', elaboradoPor(), 'Bodega'], ...CORREO_FIRMAS], fw = (W-2*m)/4, fy = H-m-22;
+  firmas.forEach(([t,nm,area],i)=>{ const fx = m+i*fw+12, lw = fw-24;
+    doc.setDrawColor(0,0,0); doc.setLineWidth(0.6); doc.line(fx, fy-6, fx+lw, fy-6);
+    font('bold',8.5); T(t+'  '+nm, fx+lw/2, fy+4, {align:'center'}); font('normal',8.5); T(area, fx+lw/2, fy+15, {align:'center'}); });
+  const nombre = 'Reporte_consumos_diarios_'+fecha+'.pdf'; doc.save(nombre);
+  toast('PDF descargado: '+nombre+(otros?' ('+otros+' salida(s) sin piscina o precría no van en este formato)':''));
+}
 function openRep(){ showRep(); }
 function rcSet(k,v){ ui.rc[k]=v; showRep(); }
 function showRep(){
@@ -946,6 +1045,11 @@ function showRep(){
     <div class="set-block" style="padding:10px 0"><h3 style="font-size:16px">Saldo disponible</h3>
       <p style="font-size:14px;color:var(--muted)">Todos los productos con saldo mayor a cero (${conSaldo}), con código, descripción, unidad y saldo actual.</p>
       <button class="btn primary full" onclick="pdfSaldos()">Descargar PDF de saldos</button></div>
+    <div class="set-block" style="padding:10px 0"><h3 style="font-size:16px">Consumos diarios (formato CORREO)</h3>
+      <p style="font-size:14px;color:var(--muted)">El mismo formato de la hoja CORREO de NUBE: piscinas y precrías hacia abajo, y solo los productos que salieron ese día. "Elaborado por" lleva el nombre de quien inició sesión.</p>
+      <div class="field"><label>Fecha</label><input type="date" value="${esc(ui.cr.fecha)}" onchange="ui.cr.fecha=this.value;showRep()"></div>
+      ${(()=>{ const d=correoDatos(ui.cr.fecha); return `<div class="info" style="margin:0 0 8px">${d.codes.length} producto(s) con salidas el ${esc(fdate(ui.cr.fecha))}${d.codes.length?': '+esc(d.codes.map(c=>pName(c)).join(', ')):''}</div>`; })()}
+      <button class="btn primary full" onclick="pdfCorreo()">Descargar PDF de consumos diarios</button></div>
     <div class="set-block" style="padding:10px 0"><h3 style="font-size:16px">Consumo entre fechas</h3>
       <div class="row"><div class="field"><label>Desde</label><input type="date" value="${esc(c.desde)}" onchange="rcSet('desde',this.value)"></div>
         <div class="field"><label>Hasta</label><input type="date" value="${esc(c.hasta)}" onchange="rcSet('hasta',this.value)"></div></div>
@@ -1407,6 +1511,7 @@ async function excelSync(manual){
     // CODIGOS: nombre exacto ↔ código
     const cod = await get("/tables('"+XL.codigos+"')/range?$select=values"), n2c = {}, c2n = {};
     (cod.values||[]).slice(1).forEach(r=>{ const nm=String(r[1]??''), c=xCode(r[2]||r[0]); if(!nm||!c) return; const k=xName(nm); if(!n2c[k]) n2c[k]=c; if(!c2n[c]) c2n[c]=nm; });
+    try{ localStorage.setItem('inv_codigos', JSON.stringify(c2n)); }catch(e){}   // nombres exactos de CODIGOS para el reporte formato CORREO
 
     // filas de CONSUMO desde el corte
     const tr = await get("/tables('"+XL.table+"')/range?$select=address"), last = +String(tr.address).match(/(\d+)$/)[1];

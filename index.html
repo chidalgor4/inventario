@@ -186,7 +186,8 @@ function sMap(o,f){ const r={}; if(o&&typeof o==='object') Object.keys(o).forEac
 function sRecs(a){ return (Array.isArray(a)?a:[]).filter(m=>m&&RX_ID.test(m.id)&&RX_DT.test(m.f)).map(m=>{
   const o={id:m.id,doc:sStr(m.doc,40),f:m.f,c:sStr(m.c,40),q:sNum(m.q),ts:sNum(m.ts)};
   const u=sMail(m.u); if(u) o.u=u; const eu=sMail(m.eu); if(eu){ o.eu=eu; o.ets=sNum(m.ets); }
-  const nf=Math.round(sNum(m.fotos)); if(nf>0) o.fotos=Math.min(FOTO_MAX_REC,nf); return o; }); }
+  const nf=Math.round(sNum(m.fotos)); if(nf>0) o.fotos=Math.min(FOTO_MAX_REC,nf);
+  const g=sStr(m.g,40); if(/^[a-z0-9]+$/.test(g)) o.g=g; return o; }); }
 const FOTO_MAX_REC = 20;
 function sCount(o){ const r={}; if(o&&typeof o==='object') Object.keys(o).forEach(k=>{ if(BAD_KEYS.has(k)) return; const x=o[k];
   if(x&&typeof x==='object') r[sStr(k,40)]={v:(x.v===null||x.v===''||x.v===undefined)?null:sNum(x.v), ts:sNum(x.ts), u:sMail(x.u)};
@@ -480,9 +481,10 @@ function openMovDetail(t,id){
       <div style="color:var(--muted);font-size:14px;margin-top:4px">${esc(m.c)} · ${fdate(m.f)} · ${t==='e'?'Doc '+esc(m.doc):esc(docLab(m.doc)||'Sin PSC/PRE')}</div>
       <div style="font-size:26px;font-weight:800;margin-top:8px" class="${t==='e'?'in-t':'out-t'}">${t==='e'?'+':'-'}${fmt(m.q)} ${esc(pUnit(m.c))}</div>
       <div style="color:var(--muted);font-size:13px;margin-top:10px;border-top:1px solid var(--line);padding-top:8px">Registrado por <b>${esc(userName(m.u))}</b>${m.u?' ('+esc(m.u)+')':''}${m.ts?'<br>'+esc(fdt(m.ts)):''}${m.eu?'<br>Editado por <b>'+esc(userName(m.eu))+'</b> · '+esc(fdt(m.ets)):''}</div></div>
+    ${t==='e'&&grupoE(m).length>1?`<div class="card" style="padding:12px;margin:0 0 10px"><div style="font-size:13px;color:var(--muted);margin-bottom:6px">Esta guía trae ${grupoE(m).length} productos:</div>${grupoE(m).map(x=>`<div style="display:flex;justify-content:space-between;gap:8px;font-size:14px;padding:3px 0"><span>${esc(pName(x.c))}</span><b class="in-t" style="white-space:nowrap">+${fmt(x.q)} ${esc(pUnit(x.c))}</b></div>`).join('')}</div>`:''}
     ${t==='e'&&m.fotos?`<button class="btn ghost full" style="margin-bottom:10px" onclick="fotoVer('e',${jsa(id)})">Ver y compartir fotos (${m.fotos})</button>`:''}
-    ${isAdmin()?`<div class="actions"><button class="btn ghost" onclick="openMove(${jsa(t)},${jsa(m.c)},${jsa(id)})">Editar</button>
-    <button class="btn danger" onclick="delMov(${jsa(t)},${jsa(id)})">Eliminar</button></div>`:''}`);
+    ${isAdmin()?`<div class="actions"><button class="btn ghost" onclick="openMove(${jsa(t)},${jsa(m.c)},${jsa(id)})">${t==='e'?'Modificar ingreso':'Editar'}</button>
+    <button class="btn danger" onclick="delMov(${jsa(t)},${jsa(id)})">${t==='e'&&grupoE(m).length>1?'Quitar este producto':'Eliminar'}</button></div>`:''}`);
 }
 function delMov(t,id){
   if(!needAdmin()) return;
@@ -497,7 +499,7 @@ function delMov(t,id){
    Sin señal quedan en una cola del equipo (IndexedDB) y se suben en la siguiente sincronización.   */
 const FOTO_DIR = 'fotos', FOTO_DIAS = 30, FOTO_MAX = 10;
 const isoLocal = ts => { const d = new Date(ts); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
-const fotoNames = (m) => { const rid = String(m.id).split('.').pop(), d = isoLocal(m.ts||Date.now()); return Array.from({length:m.fotos||0}, (_,k)=>d+'_'+rid+'_'+(k+1)+'.jpg'); };
+const fotoNames = (m) => { const rid = m.g || String(m.id).split('.').pop(), d = isoLocal(m.ts||Date.now()); return Array.from({length:m.fotos||0}, (_,k)=>d+'_'+rid+'_'+(k+1)+'.jpg'); };
 function fdb(){ return new Promise((res,rej)=>{ const r = indexedDB.open('inv_fotos',1); r.onupgradeneeded = () => r.result.createObjectStore('q',{keyPath:'name'}); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
 async function fq(mode, fn){ const db = await fdb(); return new Promise((res,rej)=>{ const tx = db.transaction('q',mode), rq = fn(tx.objectStore('q')); tx.oncomplete = () => res(rq ? rq.result : undefined); tx.onerror = () => rej(tx.error); }); }
 const fqPut = it => fq('readwrite', s=>s.put(it)), fqDel = n => fq('readwrite', s=>s.delete(n)), fqGet = n => fq('readonly', s=>s.get(n)), fqAll = () => fq('readonly', s=>s.getAll());
@@ -521,31 +523,36 @@ function fotoAdd(inp){
 function fotoDel(i){ const f = mv.fotos[i]; if(f) URL.revokeObjectURL(f.url); mv.fotos.splice(i,1); fotoPaint(); }
 
 // ---- foto con el detalle impreso en la base
-function fotoInfo(rec){ return {prod: pName(rec.c)+' ('+rec.c+')', cant: '+'+fmt(rec.q)+' '+pUnit(rec.c), doc: rec.doc||'—', fecha: fdate(rec.f), quien: userName(rec.u), hora: new Date(rec.ts).toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})}; }
+function fotoInfo(recs){ recs = [].concat(recs); const r = recs[0]; return {items: recs.map(x=>({prod:pName(x.c)+' ('+x.c+')', cant:'+'+fmt(x.q)+' '+pUnit(x.c)})), doc: r.doc||'—', fecha: fdate(r.f), quien: userName(r.u), hora: new Date(r.ts).toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})}; }
 async function stampFoto(file, info, k, n){
   let bm; try{ bm = await createImageBitmap(file, {imageOrientation:'from-image'}); }catch(e){ bm = await createImageBitmap(file); }
   const sc = Math.min(1, 1600/Math.max(bm.width, bm.height)), w = Math.round(bm.width*sc), h = Math.round(bm.height*sc);
-  const fs = Math.max(16, Math.round(w*0.03)), lh = Math.round(fs*1.4), pad = Math.round(fs*0.8), band = pad*2 + lh*4;
+  const fs = Math.max(16, Math.round(w*0.03)), lh = Math.round(fs*1.4), pad = Math.round(fs*0.8);
+  const MAXL = 8, its = info.items, show = its.length>MAXL ? its.slice(0,MAXL-1) : its, extra = its.length - show.length;
+  const nL = 3 + show.length + (extra?1:0), band = pad*2 + lh*nL;
   const c = document.createElement('canvas'); c.width = w; c.height = h + band; const x = c.getContext('2d');
   x.drawImage(bm, 0, 0, w, h); if(bm.close) bm.close();
   x.fillStyle = '#0e3461'; x.fillRect(0, h, w, band); x.fillStyle = '#1e9690'; x.fillRect(0, h, w, Math.max(4, Math.round(fs*0.25)));
   const fit = (t, max) => { if(x.measureText(t).width<=max) return t; while(t.length>3 && x.measureText(t+'…').width>max) t = t.slice(0,-1); return t+'…'; };
-  let y = h + pad + fs; const L = pad, R = w - pad;
-  x.textBaseline = 'alphabetic'; x.fillStyle = '#ffffff';
-  x.font = '700 '+fs+'px system-ui, Arial, sans-serif'; x.fillText('ENTRADA DE BODEGA · GAMBIRASI', L, y);
-  x.font = '600 '+Math.round(fs*0.85)+'px system-ui, Arial, sans-serif'; x.textAlign = 'right'; x.fillStyle = '#b4dcec'; x.fillText('Foto '+k+' de '+n, R, y); x.textAlign = 'left';
-  x.fillStyle = '#ffffff'; y += lh; x.font = '600 '+fs+'px system-ui, Arial, sans-serif'; x.fillText(fit(info.prod, R-L), L, y);
-  y += lh; x.font = '400 '+fs+'px system-ui, Arial, sans-serif'; x.fillText(fit('Cantidad: '+info.cant+'   ·   Doc: '+info.doc, R-L), L, y);
+  let y = h + pad + fs; const L = pad, R = w - pad, F = (wt,sz) => wt+' '+Math.round(sz)+'px system-ui, Arial, sans-serif';
+  x.textBaseline = 'alphabetic'; x.fillStyle = '#ffffff'; x.font = F(700,fs); x.fillText('INGRESO DE BODEGA · GAMBIRASI', L, y);
+  x.font = F(600,fs*0.85); x.textAlign = 'right'; x.fillStyle = '#b4dcec'; x.fillText('Foto '+k+' de '+n, R, y); x.textAlign = 'left';
+  y += lh; x.fillStyle = '#b4dcec'; x.font = F(600,fs); x.fillText(fit('Guía / Doc: '+info.doc+'   ·   '+its.length+' producto'+(its.length>1?'s':''), R-L), L, y);
+  x.font = F(400,fs);
+  show.forEach(it=>{ y += lh; x.fillStyle = '#ffffff'; x.textAlign = 'right'; x.font = F(700,fs); const cw = x.measureText(it.cant).width; x.fillText(it.cant, R, y);
+    x.textAlign = 'left'; x.font = F(400,fs); x.fillText(fit(it.prod, R-L-cw-fs), L, y); });
+  if(extra){ y += lh; x.fillStyle = '#b4dcec'; x.fillText('… y '+extra+' producto(s) más (ver detalle en el mensaje)', L, y); }
   y += lh; x.fillStyle = '#d7e2ec'; x.fillText(fit('Fecha: '+info.fecha+'   ·   Registró: '+info.quien+' · '+info.hora, R-L), L, y);
   return await new Promise(r=>c.toBlob(r, 'image/jpeg', 0.82));
 }
-function fotoTexto(info){ return '*Entrada de bodega GAMBIRASI*\nProducto: '+info.prod+'\nCantidad: '+info.cant+'\nDocumento: '+info.doc+'\nFecha: '+info.fecha+'\nRegistró: '+info.quien+' · '+info.hora; }
+function fotoTexto(info){ return '*Ingreso de bodega GAMBIRASI*\nGuía / Doc: '+info.doc+'\nFecha: '+info.fecha+'\n'+info.items.map((it,i)=>(i+1)+'. '+it.prod+': *'+it.cant+'*').join('\n')+'\nRegistró: '+info.quien+' · '+info.hora; }
 
 // ---- después de guardar la entrada
 let fotoShare = {files:[], text:'', urls:[]};
-async function fotoProcesar(rec, fotos){
-  openSheet(`<h2>Entrada registrada</h2><div class="info">Preparando ${fotos.length} foto(s)…</div>`);
-  const info = fotoInfo(rec), names = fotoNames(rec), files = [];
+async function fotoProcesar(recs, fotos){
+  recs = [].concat(recs);
+  openSheet(`<h2>Ingreso registrado</h2><div class="info">Preparando ${fotos.length} foto(s)…</div>`);
+  const info = fotoInfo(recs), names = fotoNames(recs[0]), files = [];
   for(let i=0;i<fotos.length;i++){
     const blob = await stampFoto(fotos[i].file, info, i+1, fotos.length); URL.revokeObjectURL(fotos[i].url);
     files.push(new File([blob], names[i], {type:'image/jpeg'}));
@@ -553,7 +560,7 @@ async function fotoProcesar(rec, fotos){
   }
   fotoShare.urls.forEach(u=>URL.revokeObjectURL(u));
   fotoShare = {files, text:fotoTexto(info), urls:files.map(f=>URL.createObjectURL(f))};
-  fotoShow('Entrada registrada', files.length+' foto(s) con el detalle en la base. Se guardan '+FOTO_DIAS+' días en el OneDrive.');
+  fotoShow(recs.length>1?'Ingreso registrado: '+recs.length+' productos':'Entrada registrada', files.length+' foto(s) con el detalle en la base. Se guardan '+FOTO_DIAS+' días en el OneDrive.');
   if(navigator.onLine) fotoFlush();
 }
 function fotoShow(title, sub){
@@ -584,8 +591,8 @@ async function fotoVer(t, id){
   }
   if(!files.length) return openSheet(`<h2>Fotos de la entrada</h2><div class="info bad">No se encontraron las fotos. Se guardan ${FOTO_DIAS} días; también puede ser que aún no se suban desde el equipo de quien las tomó, o que falte internet.</div><div class="actions"><button class="btn ghost" onclick="openMovDetail('e',${jsa(id)})">Volver</button></div>`);
   fotoShare.urls.forEach(u=>URL.revokeObjectURL(u));
-  fotoShare = {files, text:fotoTexto(fotoInfo(m)), urls:files.map(f=>URL.createObjectURL(f))};
-  fotoShow('Fotos de la entrada', files.length+' de '+m.fotos+' foto(s) · '+pName(m.c));
+  fotoShare = {files, text:fotoTexto(fotoInfo(grupoE(m))), urls:files.map(f=>URL.createObjectURL(f))};
+  fotoShow('Fotos del ingreso', files.length+' de '+m.fotos+' foto(s) · Guía '+(m.doc||'—'));
 }
 
 // ---- subir la cola al OneDrive y limpieza de 30 días
@@ -622,9 +629,108 @@ async function fotoAdmin(){   // carpeta, permiso de escritura para los usuarios
   }
   try{ localStorage.setItem('inv_fotos_clean', hoy); }catch(e){}
 }
+/* ---------- Ingreso (entrada) con varios productos por guía ----------
+   Una guía puede traer hasta 100 productos. Cada producto se guarda como una entrada propia (así el
+   stock, los reportes y el Excel siguen igual) y todas comparten el campo g (id del ingreso), el número
+   de documento, la fecha y las fotos. Solo el administrador puede modificar o eliminar un ingreso.   */
+const ING_MAX = 100;
+const grupoE = m => m && m.g ? S.entradas.filter(x=>x.g===m.g) : (m ? [m] : []);
+function openIngreso(c, id){
+  if(id && !isAdmin()) return toast('Solo el administrador puede modificar ingresos');
+  if(mv && mv.fotos) mv.fotos.forEach(f=>URL.revokeObjectURL(f.url));
+  let lines = [{c:c||'', q:''}], f = todayISO(), doc = '', g = null, old = [];
+  if(id){ const m = S.entradas.find(x=>x.id===id); if(!m) return; old = grupoE(m); lines = old.map(x=>({c:x.c, q:String(x.q)})); f = m.f; doc = m.doc||''; g = m.g||null; }
+  mv = {t:'e', c:'', id:id||null, doc:'', fotos:[], lines, old:old.map(x=>x.id), g};
+  openSheet(`
+    <h2>${id?'Modificar ingreso':'Registrar movimiento'}</h2>
+    ${id?`<p style="font-size:14px;color:var(--muted);margin:4px 0 8px">Guía con ${old.length} producto(s), registrada por ${esc(userName(old[0].u))}. Los cambios quedan a nombre del administrador.</p>`
+       :`<div class="seg" style="margin:10px 0"><button id="tE" class="on" onclick="mvTipo('e')">Entrada</button><button id="tS" onclick="mvTipo('s')">Salida</button></div>`}
+    <div class="row"><div class="field"><label>Fecha</label><input id="mf" type="date" value="${esc(f)}"></div>
+    <div class="field"><label>Nro. documento (guía)</label><input id="md" maxlength="40" value="${esc(doc)}" placeholder="Factura o guía"></div></div>
+    <div class="field"><label>Productos <span id="mcount" style="font-weight:400;color:var(--muted)"></span></label><div id="mlines"></div>
+      <button type="button" id="maddl" class="btn ghost full" style="min-height:46px" onclick="lnAdd()">+ Agregar otro producto</button></div>
+    ${id?'':'<div id="mfbox">'+fotoField()+'</div>'}
+    <button class="btn primary full" onclick="saveIngreso()">${id?'Guardar cambios':'Guardar'}</button>
+    ${id?`<button class="btn danger full" style="margin-top:8px" onclick="delIngreso()">Eliminar todo el ingreso</button>`:''}`);
+  lnPaint();
+  if(!c && !id) setTimeout(()=>{ const i=$('#lp0'); if(i) i.focus(); }, 50);
+}
+function lnStock(c){   // stock actual sin contar las líneas del ingreso que se está modificando
+  const x = calc().get(c); if(!x) return 0; let s = x.stock;
+  (mv.old||[]).forEach(id=>{ const m = S.entradas.find(e=>e.id===id); if(m && m.c===c) s -= m.q; }); return s;
+}
+function lnInfo(i){
+  const l = mv.lines[i], el = $('#li'+i); if(!el) return;
+  if(!l.c){ el.innerHTML = ''; return; }
+  const s = lnStock(l.c), q = +l.q||0, u = esc(pUnit(l.c));
+  el.innerHTML = `Stock ${fmt(s)} ${u}${q?` → quedará <b>${fmt(s+q)} ${u}</b>`:''}`;
+}
+function lnPaint(){
+  const box = $('#mlines'); if(!box) return;
+  box.innerHTML = mv.lines.map((l,i)=>`<div class="card" style="padding:10px 10px 8px;margin-bottom:8px">
+    <div style="display:flex;gap:8px;align-items:center"><b style="min-width:22px;color:var(--muted)">${i+1}</b>
+      <input id="lp${i}" autocomplete="off" placeholder="Buscar producto por nombre o código" value="${l.c?esc(pName(l.c)):''}" oninput="lnSearch(${i})" style="flex:1;min-width:0">
+      ${mv.lines.length>1?`<button type="button" aria-label="Quitar producto ${i+1}" onclick="lnDel(${i})" style="width:40px;height:40px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--bad);font-size:20px;flex:none">×</button>`:''}</div>
+    <div id="ll${i}"></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:6px"><input id="lq${i}" type="number" inputmode="decimal" step="any" min="0" placeholder="Cantidad" value="${esc(l.q)}" oninput="lnQ(${i})" style="width:42%">
+      <small id="li${i}" style="color:var(--muted);flex:1"></small></div></div>`).join('');
+  mv.lines.forEach((_,i)=>lnInfo(i));
+  const n = mv.lines.filter(l=>l.c).length; $('#mcount').textContent = '('+n+' de '+ING_MAX+')';
+  const ab = $('#maddl'); if(ab) ab.disabled = mv.lines.length>=ING_MAX;
+}
+function lnSearch(i){
+  const q = $('#lp'+i).value.trim().toLowerCase(); mv.lines[i].c = ''; lnInfo(i);
+  const l = $('#ll'+i); if(!q){ l.innerHTML=''; return; }
+  const r = S.productos.filter(p=>p.d.toLowerCase().includes(q)||p.c.includes(q)).slice(0,6);
+  l.innerHTML = r.length ? `<div class="picklist">${r.map(p=>`<button onclick="lnPick(${i},${jsa(p.c)})">${esc(p.d)}<br><small>${esc(p.c)} · ${esc(p.u)}</small></button>`).join('')}</div>` : '';
+}
+function lnPick(i,c){
+  if(mv.lines.some((l,k)=>k!==i && l.c===c)) return toast('Ese producto ya está en esta guía: suma la cantidad en su línea');
+  mv.lines[i].c = c; $('#lp'+i).value = pName(c); $('#ll'+i).innerHTML = ''; lnInfo(i);
+  $('#mcount').textContent = '('+mv.lines.filter(l=>l.c).length+' de '+ING_MAX+')'; $('#lq'+i).focus();
+}
+function lnQ(i){ mv.lines[i].q = $('#lq'+i).value; lnInfo(i); }
+function lnAdd(){
+  if(mv.lines.length>=ING_MAX) return toast('Máximo '+ING_MAX+' productos por guía');
+  mv.lines.push({c:'', q:''}); lnPaint(); const k = mv.lines.length-1; const el = $('#lp'+k); if(el){ el.focus(); el.scrollIntoView({block:'center'}); }
+}
+function lnDel(i){ mv.lines.splice(i,1); if(!mv.lines.length) mv.lines.push({c:'',q:''}); lnPaint(); }
+function saveIngreso(){
+  if(!od().user) return toast('Inicia sesión para registrar');
+  const f = $('#mf').value, doc = $('#md').value.trim();
+  if(!f) return toast('Selecciona la fecha');
+  const ls = mv.lines.filter(l=>l.c || String(l.q).trim()!=='');
+  for(let k=0;k<ls.length;k++){
+    const n = mv.lines.indexOf(ls[k])+1;
+    if(!ls[k].c) return toast('Producto '+n+': elige el producto de la lista');
+    if(!(+ls[k].q>0)) return toast('Producto '+n+': escribe una cantidad mayor a 0');
+  }
+  if(!ls.length) return toast('Agrega al menos un producto');
+  if(ls.length>ING_MAX) return toast('Máximo '+ING_MAX+' productos por guía');
+  const now = Date.now(), g = mv.g || uid();
+  if(mv.id){   // modificación del ingreso completo (solo administrador)
+    if(!needAdmin()) return;
+    const old = mv.old.map(id=>S.entradas.find(x=>x.id===id)).filter(Boolean), o0 = old[0]||{};
+    mv.old.forEach(id=>{ D.master.del[id]=now; }); D.master.entradas = D.master.entradas.filter(m=>!mv.old.includes(m.id));
+    ls.forEach(l=>{ const r = {id:uid(), doc, f, c:l.c, q:+l.q, g, ts:o0.ts||now, u:o0.u||me(), eu:me(), ets:now}; if(o0.fotos) r.fotos = o0.fotos; D.master.entradas.push(r); });
+    save('master'); closeSheet(); render(); return toast('Ingreso modificado: '+ls.length+' producto(s)');
+  }
+  const T = target(), fotos = mv.fotos||[];
+  const recs = ls.map(l=>{ const r = {id:uid(), doc, f, c:l.c, q:+l.q, g, ts:now, u:me()}; if(fotos.length) r.fotos = fotos.length; return r; });
+  T.entradas.push(...recs); save(tgtName());
+  if(fotos.length){ mv.fotos = []; render(); fotoProcesar(recs, fotos).catch(e=>toast('No se pudieron preparar las fotos: '+e.message)); return; }
+  closeSheet(); render(); toast(recs.length>1 ? 'Ingreso registrado: '+recs.length+' productos' : 'Entrada registrada');
+}
+function delIngreso(){
+  if(!needAdmin()) return;
+  if(!confirm('¿Eliminar todo este ingreso ('+mv.old.length+' producto(s))? El stock se recalculará.')) return;
+  const now = Date.now(); mv.old.forEach(id=>{ D.master.del[id]=now; }); D.master.entradas = D.master.entradas.filter(m=>!mv.old.includes(m.id));
+  save('master'); closeSheet(); render(); toast('Ingreso eliminado');
+}
 /* ---------- registrar movimiento ---------- */
 let mv = {t:'e', c:'', id:null};
 function openMove(t, c, id){
+  if((t||'e')==='e') return openIngreso(c, id);
   if(mv && mv.fotos) mv.fotos.forEach(f=>URL.revokeObjectURL(f.url));
   mv = {t: t||'e', c: c||'', id: id||null, doc:'', fotos:[]};
   if(id && !isAdmin()) return toast('Solo el administrador puede editar');
@@ -643,7 +749,7 @@ function openMove(t, c, id){
     <button class="btn primary full" onclick="saveMove()">Guardar</button>`);
   if(c) mvPreview();
 }
-function mvTipo(t){ mv.t=t; $('#tE').classList.toggle('on',t==='e'); $('#tS').classList.toggle('on',t==='s'); mv.doc=''; $('#mdbox').innerHTML = docField(); fotoPaint(); mvPreview(); }
+function mvTipo(t){ if(t==='e') return openIngreso(mv.c||''); if(mv.t==='e') return openMove('s', (mv.lines||[]).map(l=>l.c).find(Boolean)||''); mv.t=t; $('#tE').classList.toggle('on',t==='e'); $('#tS').classList.toggle('on',t==='s'); mv.doc=''; $('#mdbox').innerHTML = docField(); fotoPaint(); mvPreview(); }
 function mvSearch(){
   const q=$('#mp').value.trim().toLowerCase(); mv.c='';
   const l = $('#mpl');

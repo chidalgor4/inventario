@@ -185,7 +185,9 @@ const sMail=v=>{ v=sStr(v,200).trim().toLowerCase(); return RX_MAIL.test(v)?v:''
 function sMap(o,f){ const r={}; if(o&&typeof o==='object') Object.keys(o).forEach(k=>{ if(!BAD_KEYS.has(k)&&o[k]!==''&&o[k]!=null) r[sStr(k,120)]=f(o[k]); }); return r; }
 function sRecs(a){ return (Array.isArray(a)?a:[]).filter(m=>m&&RX_ID.test(m.id)&&RX_DT.test(m.f)).map(m=>{
   const o={id:m.id,doc:sStr(m.doc,40),f:m.f,c:sStr(m.c,40),q:sNum(m.q),ts:sNum(m.ts)};
-  const u=sMail(m.u); if(u) o.u=u; const eu=sMail(m.eu); if(eu){ o.eu=eu; o.ets=sNum(m.ets); } return o; }); }
+  const u=sMail(m.u); if(u) o.u=u; const eu=sMail(m.eu); if(eu){ o.eu=eu; o.ets=sNum(m.ets); }
+  const nf=Math.round(sNum(m.fotos)); if(nf>0) o.fotos=Math.min(FOTO_MAX_REC,nf); return o; }); }
+const FOTO_MAX_REC = 20;
 function sCount(o){ const r={}; if(o&&typeof o==='object') Object.keys(o).forEach(k=>{ if(BAD_KEYS.has(k)) return; const x=o[k];
   if(x&&typeof x==='object') r[sStr(k,40)]={v:(x.v===null||x.v===''||x.v===undefined)?null:sNum(x.v), ts:sNum(x.ts), u:sMail(x.u)};
   else if(x!==''&&x!=null) r[sStr(k,40)]={v:sNum(x), ts:0, u:''}; }); return r; }
@@ -478,6 +480,7 @@ function openMovDetail(t,id){
       <div style="color:var(--muted);font-size:14px;margin-top:4px">${esc(m.c)} · ${fdate(m.f)} · ${t==='e'?'Doc '+esc(m.doc):esc(docLab(m.doc)||'Sin PSC/PRE')}</div>
       <div style="font-size:26px;font-weight:800;margin-top:8px" class="${t==='e'?'in-t':'out-t'}">${t==='e'?'+':'-'}${fmt(m.q)} ${esc(pUnit(m.c))}</div>
       <div style="color:var(--muted);font-size:13px;margin-top:10px;border-top:1px solid var(--line);padding-top:8px">Registrado por <b>${esc(userName(m.u))}</b>${m.u?' ('+esc(m.u)+')':''}${m.ts?'<br>'+esc(fdt(m.ts)):''}${m.eu?'<br>Editado por <b>'+esc(userName(m.eu))+'</b> · '+esc(fdt(m.ets)):''}</div></div>
+    ${t==='e'&&m.fotos?`<button class="btn ghost full" style="margin-bottom:10px" onclick="fotoVer('e',${jsa(id)})">Ver y compartir fotos (${m.fotos})</button>`:''}
     ${isAdmin()?`<div class="actions"><button class="btn ghost" onclick="openMove(${jsa(t)},${jsa(m.c)},${jsa(id)})">Editar</button>
     <button class="btn danger" onclick="delMov(${jsa(t)},${jsa(id)})">Eliminar</button></div>`:''}`);
 }
@@ -487,10 +490,143 @@ function delMov(t,id){
   D.master.del[id]=Date.now(); D.master.entradas=D.master.entradas.filter(x=>x.id!==id); D.master.salidas=D.master.salidas.filter(x=>x.id!==id);
   save('master'); closeSheet(); render(); toast('Movimiento eliminado');
 }
+/* ---------- Fotos de las entradas ----------
+   Al registrar una entrada se pueden adjuntar fotos. A cada foto se le imprime abajo una franja con el
+   detalle (producto, cantidad, documento, fecha y quién registró) y se puede compartir por WhatsApp.
+   Las fotos se guardan en OneDrive (carpeta "fotos" del inventario) y se borran solas a los 30 días.
+   Sin señal quedan en una cola del equipo (IndexedDB) y se suben en la siguiente sincronización.   */
+const FOTO_DIR = 'fotos', FOTO_DIAS = 30, FOTO_MAX = 10;
+const isoLocal = ts => { const d = new Date(ts); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+const fotoNames = (m) => { const rid = String(m.id).split('.').pop(), d = isoLocal(m.ts||Date.now()); return Array.from({length:m.fotos||0}, (_,k)=>d+'_'+rid+'_'+(k+1)+'.jpg'); };
+function fdb(){ return new Promise((res,rej)=>{ const r = indexedDB.open('inv_fotos',1); r.onupgradeneeded = () => r.result.createObjectStore('q',{keyPath:'name'}); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+async function fq(mode, fn){ const db = await fdb(); return new Promise((res,rej)=>{ const tx = db.transaction('q',mode), rq = fn(tx.objectStore('q')); tx.oncomplete = () => res(rq ? rq.result : undefined); tx.onerror = () => rej(tx.error); }); }
+const fqPut = it => fq('readwrite', s=>s.put(it)), fqDel = n => fq('readwrite', s=>s.delete(n)), fqGet = n => fq('readonly', s=>s.get(n)), fqAll = () => fq('readonly', s=>s.getAll());
+
+// ---- en la pantalla de registro
+function fotoField(){
+  if(mv.t!=='e' || mv.id) return '';
+  return `<div class="field"><label>Fotos (opcional)</label>
+    <input id="mfile" type="file" accept="image/*" multiple style="display:none" onchange="fotoAdd(this)">
+    <button type="button" class="btn ghost full" style="min-height:46px" onclick="$('#mfile').click()">Tomar o adjuntar fotos</button>
+    <div id="mthumbs" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">${(mv.fotos||[]).map((f,i)=>`<div style="position:relative"><img src="${f.url}" alt="Foto ${i+1}" style="width:72px;height:72px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"><button type="button" aria-label="Quitar foto ${i+1}" onclick="fotoDel(${i})" style="position:absolute;top:-6px;right:-6px;width:26px;height:26px;border-radius:50%;border:none;background:var(--bad);color:#fff;font-weight:700">×</button></div>`).join('')}</div>
+    ${(mv.fotos||[]).length?`<small style="color:var(--muted)">${mv.fotos.length} foto(s). Al guardar podrás compartirlas por WhatsApp.</small>`:''}</div>`;
+}
+function fotoPaint(){ const b = $('#mfbox'); if(b) b.innerHTML = fotoField(); }
+function fotoAdd(inp){
+  const fs = [...(inp.files||[])].filter(f=>/^image\//.test(f.type)); inp.value = '';
+  mv.fotos = mv.fotos || [];
+  for(const f of fs){ if(mv.fotos.length>=FOTO_MAX){ toast('Máximo '+FOTO_MAX+' fotos por entrada'); break; } mv.fotos.push({file:f, url:URL.createObjectURL(f)}); }
+  fotoPaint();
+}
+function fotoDel(i){ const f = mv.fotos[i]; if(f) URL.revokeObjectURL(f.url); mv.fotos.splice(i,1); fotoPaint(); }
+
+// ---- foto con el detalle impreso en la base
+function fotoInfo(rec){ return {prod: pName(rec.c)+' ('+rec.c+')', cant: '+'+fmt(rec.q)+' '+pUnit(rec.c), doc: rec.doc||'—', fecha: fdate(rec.f), quien: userName(rec.u), hora: new Date(rec.ts).toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})}; }
+async function stampFoto(file, info, k, n){
+  let bm; try{ bm = await createImageBitmap(file, {imageOrientation:'from-image'}); }catch(e){ bm = await createImageBitmap(file); }
+  const sc = Math.min(1, 1600/Math.max(bm.width, bm.height)), w = Math.round(bm.width*sc), h = Math.round(bm.height*sc);
+  const fs = Math.max(16, Math.round(w*0.03)), lh = Math.round(fs*1.4), pad = Math.round(fs*0.8), band = pad*2 + lh*4;
+  const c = document.createElement('canvas'); c.width = w; c.height = h + band; const x = c.getContext('2d');
+  x.drawImage(bm, 0, 0, w, h); if(bm.close) bm.close();
+  x.fillStyle = '#0e3461'; x.fillRect(0, h, w, band); x.fillStyle = '#1e9690'; x.fillRect(0, h, w, Math.max(4, Math.round(fs*0.25)));
+  const fit = (t, max) => { if(x.measureText(t).width<=max) return t; while(t.length>3 && x.measureText(t+'…').width>max) t = t.slice(0,-1); return t+'…'; };
+  let y = h + pad + fs; const L = pad, R = w - pad;
+  x.textBaseline = 'alphabetic'; x.fillStyle = '#ffffff';
+  x.font = '700 '+fs+'px system-ui, Arial, sans-serif'; x.fillText('ENTRADA DE BODEGA · GAMBIRASI', L, y);
+  x.font = '600 '+Math.round(fs*0.85)+'px system-ui, Arial, sans-serif'; x.textAlign = 'right'; x.fillStyle = '#b4dcec'; x.fillText('Foto '+k+' de '+n, R, y); x.textAlign = 'left';
+  x.fillStyle = '#ffffff'; y += lh; x.font = '600 '+fs+'px system-ui, Arial, sans-serif'; x.fillText(fit(info.prod, R-L), L, y);
+  y += lh; x.font = '400 '+fs+'px system-ui, Arial, sans-serif'; x.fillText(fit('Cantidad: '+info.cant+'   ·   Doc: '+info.doc, R-L), L, y);
+  y += lh; x.fillStyle = '#d7e2ec'; x.fillText(fit('Fecha: '+info.fecha+'   ·   Registró: '+info.quien+' · '+info.hora, R-L), L, y);
+  return await new Promise(r=>c.toBlob(r, 'image/jpeg', 0.82));
+}
+function fotoTexto(info){ return '*Entrada de bodega GAMBIRASI*\nProducto: '+info.prod+'\nCantidad: '+info.cant+'\nDocumento: '+info.doc+'\nFecha: '+info.fecha+'\nRegistró: '+info.quien+' · '+info.hora; }
+
+// ---- después de guardar la entrada
+let fotoShare = {files:[], text:'', urls:[]};
+async function fotoProcesar(rec, fotos){
+  openSheet(`<h2>Entrada registrada</h2><div class="info">Preparando ${fotos.length} foto(s)…</div>`);
+  const info = fotoInfo(rec), names = fotoNames(rec), files = [];
+  for(let i=0;i<fotos.length;i++){
+    const blob = await stampFoto(fotos[i].file, info, i+1, fotos.length); URL.revokeObjectURL(fotos[i].url);
+    files.push(new File([blob], names[i], {type:'image/jpeg'}));
+    try{ await fqPut({name:names[i], blob, ts:Date.now()}); }catch(e){}
+  }
+  fotoShare.urls.forEach(u=>URL.revokeObjectURL(u));
+  fotoShare = {files, text:fotoTexto(info), urls:files.map(f=>URL.createObjectURL(f))};
+  fotoShow('Entrada registrada', files.length+' foto(s) con el detalle en la base. Se guardan '+FOTO_DIAS+' días en el OneDrive.');
+  if(navigator.onLine) fotoFlush();
+}
+function fotoShow(title, sub){
+  openSheet(`<h2>${esc(title)}</h2><p style="font-size:14px;color:var(--muted);margin:4px 0 10px">${esc(sub)}</p>
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">${fotoShare.urls.map((u,i)=>`<img src="${u}" alt="Foto ${i+1}" style="width:100%;border-radius:10px;border:1px solid var(--line)">`).join('')}</div>
+    <div class="actions" style="margin-top:12px"><button class="btn ghost" onclick="closeSheet()">Cerrar</button><button class="btn primary" onclick="fotoCompartir()">Compartir por WhatsApp</button></div>`);
+}
+async function fotoCompartir(){
+  const {files, text} = fotoShare; if(!files.length) return;
+  if(navigator.canShare && navigator.canShare({files})){
+    try{ await navigator.share({files, text}); return; }catch(e){ if(e.name==='AbortError') return; }
+  }
+  // computadora o navegador sin "compartir archivos": se descargan las fotos y se abre WhatsApp con el texto
+  files.forEach(f=>{ const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1500); });
+  window.open('https://wa.me/?text='+encodeURIComponent(text), '_blank', 'noopener');
+  toast('Fotos descargadas: adjúntalas en el chat de WhatsApp que se abrió');
+}
+
+// ---- ver fotos de una entrada ya registrada (desde el equipo o desde OneDrive, hasta 30 días)
+async function fotoVer(t, id){
+  const m = S.entradas.find(x=>x.id===id); if(!m || !m.fotos) return;
+  openSheet(`<h2>Fotos de la entrada</h2><div class="info">Cargando fotos…</div>`);
+  const files = [];
+  for(const n of fotoNames(m)){
+    let blob = null; try{ const q = await fqGet(n); if(q) blob = q.blob; }catch(e){}
+    if(!blob && navigator.onLine && od().token){ try{ const r = await graph(ip(FOTO_DIR+'/'+n)+':/content', {raw:true}); if(r) blob = await r.blob(); }catch(e){} }
+    if(blob) files.push(new File([blob], n, {type:'image/jpeg'}));
+  }
+  if(!files.length) return openSheet(`<h2>Fotos de la entrada</h2><div class="info bad">No se encontraron las fotos. Se guardan ${FOTO_DIAS} días; también puede ser que aún no se suban desde el equipo de quien las tomó, o que falte internet.</div><div class="actions"><button class="btn ghost" onclick="openMovDetail('e',${jsa(id)})">Volver</button></div>`);
+  fotoShare.urls.forEach(u=>URL.revokeObjectURL(u));
+  fotoShare = {files, text:fotoTexto(fotoInfo(m)), urls:files.map(f=>URL.createObjectURL(f))};
+  fotoShow('Fotos de la entrada', files.length+' de '+m.fotos+' foto(s) · '+pName(m.c));
+}
+
+// ---- subir la cola al OneDrive y limpieza de 30 días
+let fotoBusy = false;
+async function fotoFlush(){
+  if(fotoBusy || !navigator.onLine || !od().token) return; fotoBusy = true;
+  try{
+    const items = await fqAll(), lim = Date.now() - FOTO_DIAS*864e5;
+    for(const it of items){
+      if(it.ts < lim){ await fqDel(it.name); continue; }
+      if(it.up) continue;
+      try{ await graph(ip(FOTO_DIR+'/'+it.name)+':/content', {method:'PUT', headers:{'Content-Type':'image/jpeg'}, body:it.blob}); it.up = Date.now(); await fqPut(it); }
+      catch(e){ if([401,403,404].includes(e.status)) break; }
+    }
+    // la copia del equipo se conserva 2 días para compartir rápido; después queda solo en OneDrive
+    for(const it of await fqAll()) if(it.up && it.up < Date.now()-2*864e5) await fqDel(it.name);
+  }catch(e){} finally{ fotoBusy = false; }
+}
+async function fotoAdmin(){   // carpeta, permiso de escritura para los usuarios y borrado de fotos de más de 30 días
+  if(!isAdmin() || !navigator.onLine) return;
+  let dir = await graph(ip(FOTO_DIR));
+  if(!dir) dir = await graph(itemUrl(SHARED.folder)+'/children', {method:'POST', headers:J, body:JSON.stringify({name:FOTO_DIR, folder:{}, '@microsoft.graph.conflictBehavior':'fail'})});
+  let done = {}; try{ done = JSON.parse(localStorage.getItem('inv_fotos_perm')||'{}')||{}; }catch(e){}
+  for(const u of (D.master.usuarios||[]).filter(u=>u.activo && !done[u.email])){
+    try{ await graph(itemUrl(dir.id)+'/invite', {method:'POST', headers:J, body:JSON.stringify({recipients:[{email:u.email}], requireSignIn:true, sendInvitation:false, roles:['write']})}); done[u.email] = Date.now(); }catch(e){}
+  }
+  try{ localStorage.setItem('inv_fotos_perm', JSON.stringify(done)); }catch(e){}
+  const hoy = todayISO(); if(localStorage.getItem('inv_fotos_clean')===hoy) return;
+  const lim = Date.now() - FOTO_DIAS*864e5; let next = itemUrl(dir.id)+'/children?$select=id,name,createdDateTime&$top=200', borradas = 0;
+  while(next){
+    const r = await graph(next); if(!r) break;
+    for(const f of r.value||[]) if(Date.parse(f.createdDateTime) < lim){ try{ await graph(itemUrl(f.id), {method:'DELETE'}); borradas++; }catch(e){} }
+    next = r['@odata.nextLink'] ? r['@odata.nextLink'].replace('https://graph.microsoft.com/v1.0','') : null;
+  }
+  try{ localStorage.setItem('inv_fotos_clean', hoy); }catch(e){}
+}
 /* ---------- registrar movimiento ---------- */
 let mv = {t:'e', c:'', id:null};
 function openMove(t, c, id){
-  mv = {t: t||'e', c: c||'', id: id||null, doc:''};
+  if(mv && mv.fotos) mv.fotos.forEach(f=>URL.revokeObjectURL(f.url));
+  mv = {t: t||'e', c: c||'', id: id||null, doc:'', fotos:[]};
   if(id && !isAdmin()) return toast('Solo el administrador puede editar');
   let ex = null; if(id) ex = (mv.t==='e'?S.entradas:S.salidas).find(x=>x.id===id);
   if(ex) mv.doc = String(ex.doc||'');
@@ -502,11 +638,12 @@ function openMove(t, c, id){
     <div class="row"><div class="field"><label>Cantidad</label><input id="mq" type="number" inputmode="decimal" step="any" min="0" value="${esc(ex?ex.q:'')}" oninput="mvPreview()"></div>
     <div class="field"><label>Fecha</label><input id="mf" type="date" value="${esc(ex?ex.f:todayISO())}"></div></div>
     <div class="field" id="mdbox">${docField()}</div>
+    <div id="mfbox">${fotoField()}</div>
     <div id="mprev"></div>
     <button class="btn primary full" onclick="saveMove()">Guardar</button>`);
   if(c) mvPreview();
 }
-function mvTipo(t){ mv.t=t; $('#tE').classList.toggle('on',t==='e'); $('#tS').classList.toggle('on',t==='s'); mv.doc=''; $('#mdbox').innerHTML = docField(); mvPreview(); }
+function mvTipo(t){ mv.t=t; $('#tE').classList.toggle('on',t==='e'); $('#tS').classList.toggle('on',t==='s'); mv.doc=''; $('#mdbox').innerHTML = docField(); fotoPaint(); mvPreview(); }
 function mvSearch(){
   const q=$('#mp').value.trim().toLowerCase(); mv.c='';
   const l = $('#mpl');
@@ -543,8 +680,10 @@ function saveMove(){
     const rec = {id:uid(), doc, f, c:mv.c, q, ts:(old&&old.ts)||now, u:(old&&old.u)||me(), eu:me(), ets:now};
     (mv.t==='e'?D.master.entradas:D.master.salidas).push(rec); save('master');
   } else {
-    const rec = {id:uid(), doc, f, c:mv.c, q, ts:now, u:me()}, T = target();
+    const rec = {id:uid(), doc, f, c:mv.c, q, ts:now, u:me()}, T = target(), fotos = mv.t==='e' ? (mv.fotos||[]) : [];
+    if(fotos.length) rec.fotos = fotos.length;
     (mv.t==='e'?T.entradas:T.salidas).push(rec); save(tgtName());
+    if(fotos.length){ mv.fotos = []; render(); fotoProcesar(rec, fotos).catch(e=>toast('No se pudieron preparar las fotos: '+e.message)); return; }
   }
   closeSheet(); render(); toast(mv.t==='e'?'Entrada registrada':'Salida registrada');
 }
@@ -1431,6 +1570,8 @@ async function autoSync(manual){
     await syncRegs(admin);
     derive(); persist(); odSet({last:Date.now()});
     if(admin) await excelSync(manual);
+    if(admin){ try{ await fotoAdmin(); }catch(e){} }
+    fotoFlush();
     const typing = document.activeElement && ['INPUT','SELECT'].includes(document.activeElement.tagName);
     if(!$('#sheet').classList.contains('show') && !typing) render();
     if(manual) toast('Sincronizado');
@@ -1665,6 +1806,7 @@ async function addUser(){
     const msg = 'Hola '+nombre+', te doy acceso a la app de inventario de bodega GAMBIRASI. Ábrela en '+APP_URL+' e inicia sesión con este mismo correo ('+email+').';
     await graph(itemUrl(SHARED.folder)+'/invite', {method:'POST', headers:J, body:JSON.stringify({recipients:[{email}], requireSignIn:true, sendInvitation:true, roles:['read'], message:msg})});
     await graph(itemUrl(f.id)+'/invite', {method:'POST', headers:J, body:JSON.stringify({recipients:[{email}], requireSignIn:true, sendInvitation:false, roles:['write']})});
+    try{ const fd = await graph(ip(FOTO_DIR)); if(fd){ await graph(itemUrl(fd.id)+'/invite', {method:'POST', headers:J, body:JSON.stringify({recipients:[{email}], requireSignIn:true, sendInvitation:false, roles:['write']})}); const dn=JSON.parse(localStorage.getItem('inv_fotos_perm')||'{}'); dn[email]=Date.now(); localStorage.setItem('inv_fotos_perm', JSON.stringify(dn)); } }catch(e){}
     const now = Date.now(), ex = D.master.usuarios.find(u=>u.email===email);
     if(ex) Object.assign(ex, {nombre, file, activo:true, ts:now}); else D.master.usuarios.push({email, nombre, file, activo:true, ts:now});
     save('master'); await autoSync(); render(); toast('Usuario agregado. Le llegará un correo con el link.');
@@ -1692,6 +1834,8 @@ async function removeUser(email){
   try{
     const u = D.master.usuarios.find(x=>x.email===email); if(!u) return;
     const ids = [SHARED.folder], f = await graph(ip(REG_DIR+'/'+u.file)); if(f) ids.push(f.id);
+    const fd = await graph(ip(FOTO_DIR)); if(fd) ids.push(fd.id);
+    try{ const dn=JSON.parse(localStorage.getItem('inv_fotos_perm')||'{}'); delete dn[email]; localStorage.setItem('inv_fotos_perm', JSON.stringify(dn)); }catch(e){}
     for(const id of ids){
       const ps = await graph(itemUrl(id)+'/permissions');
       for(const p of (ps&&ps.value)||[]){ if(p.inheritedFrom || (p.roles||[]).includes('owner')) continue;

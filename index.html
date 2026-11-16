@@ -508,8 +508,12 @@ const fqPut = it => fq('readwrite', s=>s.put(it)), fqDel = n => fq('readwrite', 
 function fotoField(){
   if(mv.t!=='e' || mv.id) return '';
   return `<div class="field"><label>Fotos (opcional)</label>
+    <input id="mcam" type="file" accept="image/*" capture="environment" style="display:none" onchange="fotoAdd(this)">
     <input id="mfile" type="file" accept="image/*" multiple style="display:none" onchange="fotoAdd(this)">
-    <button type="button" class="btn ghost full" style="min-height:46px" onclick="$('#mfile').click()">Tomar o adjuntar fotos</button>
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
+      <button type="button" class="btn ghost" style="min-height:52px;border-style:dashed;border-width:1.5px" onclick="$('#mcam').click()"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg> Tomar foto</button>
+      <button type="button" class="btn ghost" style="min-height:52px;border-style:dashed;border-width:1.5px" onclick="$('#mfile').click()"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg> Galería</button>
+    </div>
     <div id="mthumbs" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">${(mv.fotos||[]).map((f,i)=>`<div style="position:relative"><img src="${f.url}" alt="Foto ${i+1}" style="width:72px;height:72px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"><button type="button" aria-label="Quitar foto ${i+1}" onclick="fotoDel(${i})" style="position:absolute;top:-6px;right:-6px;width:26px;height:26px;border-radius:50%;border:none;background:var(--bad);color:#fff;font-weight:700">×</button></div>`).join('')}</div>
     ${(mv.fotos||[]).length?`<small style="color:var(--muted)">${mv.fotos.length} foto(s). Al guardar podrás compartirlas por WhatsApp.</small>`:''}</div>`;
 }
@@ -1279,6 +1283,146 @@ async function pdfCorreo(){
   const nombre = 'Reporte_consumos_diarios_'+fecha+'.pdf'; doc.save(nombre);
   toast('PDF descargado: '+nombre+(otros?' ('+otros+' salida(s) sin piscina o precría no van en este formato)':''));
 }
+/* ---------- Reporte mensual de KPI (PDF para descargar o compartir por WhatsApp) ---------- */
+ui.kpi = ui.kpi || {mes: todayISO().slice(0,7)};
+const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+const mesNombre = ym => { const [y,m] = ym.split('-').map(Number); return MESES[m-1]+' '+y; };
+const mesPrev = ym => { let [y,m] = ym.split('-').map(Number); m--; if(!m){ m=12; y--; } return y+'-'+String(m).padStart(2,'0'); };
+const finMes = ym => { const [y,m] = ym.split('-').map(Number); return ym+'-'+String(new Date(y,m,0).getDate()).padStart(2,'0'); };
+function kpiDatos(ym){
+  const d0 = ym+'-01', d1 = finMes(ym), hoy = todayISO(), corte = d1 < hoy ? d1 : hoy;
+  const enMes = x => x.f >= d0 && x.f <= d1;
+  const sal = S.salidas.filter(enMes), ent = S.entradas.filter(enMes);
+  const stockAt = (c, d) => { const p = S.productos.find(x=>x.c===c); let s = p ? p.i : 0;
+    S.entradas.forEach(e=>{ if(e.c===c && e.f<=d) s+=e.q; }); S.salidas.forEach(e=>{ if(e.c===c && e.f<=d) s-=e.q; }); return Math.round(s*1000)/1000; };
+  const dAntes = (()=>{ const [y,m] = ym.split('-').map(Number); const t = new Date(y,m-1,0); return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0'); })();
+  const dias = Math.max(1, Math.round((Date.parse(corte)-Date.parse(d0))/864e5)+1);
+  const prods = S.productos.map(p=>{ const c = p.c, sc = sal.filter(x=>x.c===c).reduce((a,x)=>a+x.q,0), ec = ent.filter(x=>x.c===c).reduce((a,x)=>a+x.q,0);
+    const si = stockAt(c, dAntes), sf = stockAt(c, corte), diario = sc/dias;
+    return {c, d:p.d, u:p.u, bal:esBal(c), si, ent:ec, sal:sc, sf, cob: diario>0 ? sf/diario : null, rot: (si+sf)>0 ? sc/((si+sf)/2) : 0}; });
+  const bal = prods.filter(p=>p.bal), balSc = bal.reduce((a,p)=>a+p.sal,0), balLb = bal.reduce((a,p)=>a+p.sal*lbPer(p.c),0);
+  const balSf = bal.reduce((a,p)=>a+p.sf,0), balSi = bal.reduce((a,p)=>a+p.si,0);
+  // mes anterior para comparar
+  const pm = mesPrev(ym), p0 = pm+'-01', p1 = finMes(pm), salP = S.salidas.filter(x=>x.f>=p0 && x.f<=p1), entP = S.entradas.filter(x=>x.f>=p0 && x.f<=p1);
+  const balLbP = salP.filter(x=>esBal(x.c)).reduce((a,x)=>a+x.q*lbPer(x.c),0);
+  const diasP = Math.round((Date.parse(p1)-Date.parse(p0))/864e5)+1;
+  // por día y por piscina (balanceado)
+  const porDia = {}; sal.forEach(x=>{ if(esBal(x.c)) porDia[x.f] = (porDia[x.f]||0) + x.q; });
+  const porPsc = {}; sal.forEach(x=>{ if(!esBal(x.c)) return; const d = xPisc(x.doc); if(d==='N/A') return; porPsc[d] = (porPsc[d]||0) + x.q*lbPer(x.c); });
+  const guias = new Set(ent.map(x=>x.g || (x.doc||'')+'|'+x.f+'|'+x.c)).size, guiasP = new Set(entP.map(x=>x.g || (x.doc||'')+'|'+x.f+'|'+x.c)).size;
+  const agot = prods.filter(p=>p.sf<=0), bajos = prods.filter(p=>p.cob!==null && p.cob<7 && p.sf>0);
+  const conMov = prods.filter(p=>p.sal||p.ent).sort((a,b)=>(b.bal-a.bal) || a.d.localeCompare(b.d,'es'));
+  return {ym, d0, d1, corte, dias, sal, ent, prods, balSc, balLb, balSf, balSi, balLbP, diasP, salP, entP, porDia, porPsc, guias, guiasP, agot, bajos, conMov,
+    usuarios: new Set([...sal,...ent].map(x=>x.u)).size};
+}
+async function pdfKPI(){
+  const ym = ui.kpi.mes; if(!/^\d{4}-\d{2}$/.test(ym||'')) return toast('Elige el mes');
+  const K = kpiDatos(ym); if(!K.sal.length && !K.ent.length) return toast('No hay movimientos en '+mesNombre(ym));
+  try{ await loadPDF(); }catch(e){ return toast(e.message); }
+  const logo = await imgData('logo-ag.png');
+  const doc = new window.jspdf.jsPDF({unit:'pt', format:'a4'}), W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), m = 34;
+  const NAVY=[14,52,97], TEAL=[19,118,114], ORANGE=[194,81,31], SKY=[180,220,236], INK=[14,35,64], MUTED=[78,96,120], LINE=[215,226,236], RED=[180,35,24], GREEN=[21,128,61], SOFT=[242,246,250];
+  const T = (s,x,y,o) => doc.text(pdfTxt(String(s)), x, y, o||{});
+  const font = (st,sz,col) => { doc.setFont('helvetica', st); doc.setFontSize(sz); doc.setTextColor(...(col||INK)); };
+  const pct = (a,b) => b ? ((a-b)/b*100) : null;
+  const pctTxt = v => v===null ? 'sin dato del mes anterior' : (v>=0?'+':'')+corNum(v,1)+' % vs mes anterior';
+  const n0 = v => corNum(v, Math.abs(v-Math.round(v))<1e-9 ? 0 : 1);
+  const elab = String(ui.cr.elab||'').trim();
+  const header = (sub) => {
+    doc.setFillColor(...NAVY); doc.rect(0,0,W,78,'F'); doc.setFillColor(...TEAL); doc.rect(0,78,W,4,'F');
+    doc.setFillColor(255,255,255); doc.roundedRect(m,14,56,50,8,8,'F'); if(logo) doc.addImage(logo,'PNG',m+4,17,48,41);
+    font('bold',17,[255,255,255]); T('Reporte mensual de KPI · Bodega', m+70, 34);
+    font('normal',10.5,SKY); T('GAMBIRASI SA · Acuarios del Golfo · '+sub, m+70, 51);
+    font('bold',13,[255,255,255]); T(mesNombre(ym).replace(/^./,c=>c.toUpperCase()), W-m, 34, {align:'right'});
+    font('normal',8.5,SKY); T('Del '+fdate(K.d0)+' al '+fdate(K.corte)+' ('+K.dias+' días)', W-m, 50, {align:'right'});
+  };
+  const footer = () => { const n = doc.internal.getNumberOfPages();
+    for(let i=1;i<=n;i++){ doc.setPage(i); font('normal',7.5,MUTED); doc.setDrawColor(...LINE); doc.line(m,H-30,W-m,H-30);
+      T('Generado el '+new Date().toLocaleString('es-EC')+(elab?' · Elaborado por: '+elab.toUpperCase():'')+' · App Inventario GAMBIRASI', m, H-18); T('Página '+i+' de '+n, W-m, H-18, {align:'right'}); } };
+  header('Resumen del mes');
+  // tarjetas de KPI
+  const cards = [
+    ['Balanceado consumido', n0(K.balLb)+' lb', n0(K.balSc)+' sacos · '+pctTxt(pct(K.balLb, K.balLbP)), TEAL],
+    ['Promedio diario de balanceado', n0(K.balSc/K.dias)+' sacos/día', n0(K.balLb/K.dias)+' lb por día', TEAL],
+    ['Cobertura de balanceado', K.balSc ? n0(K.balSf/(K.balSc/K.dias))+' días' : '—', 'Stock al cierre: '+n0(K.balSf)+' sacos', NAVY],
+    ['Rotación de balanceado', (K.balSi+K.balSf)>0 ? corNum(K.balSc/((K.balSi+K.balSf)/2),2)+' veces' : '—', 'Consumo ÷ stock promedio del mes', NAVY],
+    ['Salidas registradas', fmt(K.sal.length), pctTxt(pct(K.sal.length, K.salP.length)), ORANGE],
+    ['Ingresos (guías)', fmt(K.guias), fmt(K.ent.length)+' líneas · '+pctTxt(pct(K.guias, K.guiasP)), ORANGE],
+    ['Productos agotados al cierre', fmt(K.agot.length)+' de '+fmt(K.prods.length), fmt(K.bajos.length)+' con menos de 7 días de cobertura', K.agot.length?RED:GREEN],
+    ['Productos con movimiento', fmt(K.conMov.length), fmt(K.usuarios)+' usuario(s) registraron', NAVY]];
+  const cw = (W-2*m-3*10)/4, ch = 70; let y = 100;
+  cards.forEach((c,i)=>{ const x = m+(i%4)*(cw+10), yy = y+Math.floor(i/4)*(ch+10);
+    doc.setFillColor(...SOFT); doc.setDrawColor(...LINE); doc.roundedRect(x,yy,cw,ch,7,7,'FD'); doc.setFillColor(...c[3]); doc.rect(x,yy+8,3,ch-16,'F');
+    font('normal',7.8,MUTED); T(c[0], x+10, yy+16); font('bold',15,c[3]); T(c[1], x+10, yy+38);
+    font('normal',6.8,MUTED); doc.splitTextToSize(pdfTxt(c[2]), cw-16).slice(0,2).forEach((l,k)=>doc.text(l, x+10, yy+52+k*8.5)); });
+  y += 2*(ch+10) + 12;
+  // gráfico 1: balanceado por día
+  const box = (t, sub, yy, hh) => { font('bold',11.5,NAVY); T(t, m, yy); font('normal',8,MUTED); T(sub, W-m, yy, {align:'right'}); doc.setDrawColor(...LINE); doc.line(m, yy+5, W-m, yy+5); return yy+14; };
+  y = box('Consumo diario de balanceado', 'sacos por día · línea = promedio', y);
+  const gh = 130, gx = m+28, gw = W-m-gx, days = []; for(let t = Date.parse(K.d0); t <= Date.parse(K.corte); t += 864e5){ days.push(new Date(t).toISOString().slice(0,10)); }
+  const maxD = Math.max(1, ...days.map(d=>K.porDia[d]||0)), step = Math.pow(10, Math.floor(Math.log10(maxD))) * (maxD/Math.pow(10,Math.floor(Math.log10(maxD)))>5?2:1), top = Math.ceil(maxD/step)*step;
+  font('normal',7,MUTED); doc.setDrawColor(230,236,242);
+  for(let v=0; v<=top+1e-9; v+=step){ const yy = y+gh-(v/top)*gh; doc.line(gx, yy, gx+gw, yy); T(n0(v), gx-4, yy+2.5, {align:'right'}); }
+  const bw = gw/days.length;
+  days.forEach((d,i)=>{ const v = K.porDia[d]||0, bh = v/top*gh; if(v){ doc.setFillColor(...TEAL); doc.rect(gx+i*bw+bw*0.15, y+gh-bh, bw*0.7, bh, 'F'); }
+    if(days.length<=16 || i%2===0){ font('normal',6.5,MUTED); T(String(+d.slice(8)), gx+i*bw+bw/2, y+gh+9, {align:'center'}); } });
+  const avg = K.balSc/K.dias, ay = y+gh-(avg/top)*gh; doc.setDrawColor(...ORANGE); doc.setLineWidth(1); doc.setLineDashPattern([3,2],0); doc.line(gx, ay, gx+gw, ay); doc.setLineDashPattern([],0); doc.setLineWidth(0.5);
+  doc.setFillColor(255,255,255); font('bold',7,ORANGE); const lt='Promedio: '+n0(avg)+' sacos/día'; doc.rect(gx+2, ay-11, doc.getTextWidth(lt)+6, 9, 'F'); T(lt, gx+5, ay-4);
+  y += gh + 26;
+  // gráfico 2: balanceado por piscina (lb)
+  y = box('Balanceado por piscina y precría', 'libras en el mes', y);
+  const dest = [...PSC, ...PRE], maxP = Math.max(1, ...dest.map(d=>K.porPsc[d]||0)), ph = 120, pw = (W-2*m-28)/dest.length, px = m+28;
+  const stepP = Math.pow(10, Math.floor(Math.log10(maxP))) * (maxP/Math.pow(10,Math.floor(Math.log10(maxP)))>5?2:1), topP = Math.ceil(maxP/stepP)*stepP;
+  font('normal',6.5,MUTED); doc.setDrawColor(230,236,242);
+  for(let v=0; v<=topP+1e-9; v+=stepP){ const yy = y+ph-(v/topP)*ph; doc.line(px, yy, W-m, yy); T(n0(v/1000)+'k', px-4, yy+2.5, {align:'right'}); }
+  dest.forEach((d,i)=>{ const v = K.porPsc[d]||0, bh = v/topP*ph; if(v){ doc.setFillColor(...(PRE.includes(d)?ORANGE:NAVY)); doc.rect(px+i*pw+pw*0.15, y+ph-bh, pw*0.7, bh, 'F'); }
+    font('normal',5.8,MUTED); T(PRE.includes(d)?'P'+d.slice(3):String(d).replace(/^0/,''), px+i*pw+pw/2, y+ph+8, {align:'center'}); });
+  y += ph + 16; font('normal',7,MUTED); doc.setFillColor(...NAVY); doc.rect(m,y-6,8,6,'F'); T('Piscinas', m+12, y); doc.setFillColor(...ORANGE); doc.rect(m+60,y-6,8,6,'F'); T('Precrías (P1 = PRE01)', m+72, y);
+  // página 2: productos
+  doc.addPage(); header('Detalle por producto');
+  y = 104;
+  const top10 = K.prods.filter(p=>p.sal>0).sort((a,b)=>(b.sal*(lbPer(b.c)||1))-(a.sal*(lbPer(a.c)||1))).slice(0,10);
+  font('bold',11.5,NAVY); T('Movimiento del mes por producto', m, y);
+  font('normal',8,MUTED); T('Balanceado primero, luego insumos (A-Z). Cobertura = stock al cierre ÷ consumo diario del mes.', m, y+12);
+  const rows = K.conMov.map(p=>[p.c, p.d, p.u, n0(p.si), p.ent?n0(p.ent):'—', p.sal?n0(p.sal):'—', n0(p.sf), p.cob===null?'—':(p.cob>=999?'999+':n0(p.cob))]);
+  doc.autoTable({startY:y+20, margin:{left:m,right:m, top:100}, head:[['Código','Producto','Und','Stock inicio','Entradas','Salidas','Stock cierre','Cobertura (días)']], body:rows.map(r=>r.map(pdfTxt)),
+    styles:{fontSize:7.5, cellPadding:3, textColor:INK, lineColor:LINE, lineWidth:0.4}, headStyles:{fillColor:NAVY, textColor:255, fontStyle:'bold'}, alternateRowStyles:{fillColor:SOFT},
+    columnStyles:{0:{cellWidth:42},1:{cellWidth:'auto'},2:{cellWidth:28,halign:'center'},3:{halign:'right',cellWidth:54},4:{halign:'right',cellWidth:50},5:{halign:'right',cellWidth:50},6:{halign:'right',cellWidth:54},7:{halign:'right',cellWidth:56}},
+    didParseCell: h => { if(h.section!=='body') return; const p = K.conMov[h.row.index]; if(!p) return;
+      if(h.column.index===6 && p.sf<=0){ h.cell.styles.textColor = RED; h.cell.styles.fontStyle = 'bold'; }
+      if(h.column.index===7 && p.cob!==null && p.cob<7){ h.cell.styles.textColor = p.cob<3?RED:ORANGE; h.cell.styles.fontStyle = 'bold'; }
+      if(h.row.index===K.conMov.filter(x=>x.bal).length-1) h.cell.styles.lineWidth = {bottom:1.2}; },
+    willDrawPage: d => { if(d.pageNumber>2) header('Detalle por producto'); } });
+  y = doc.lastAutoTable.finalY + 22;
+  if(y > H-200){ doc.addPage(); header('Principales consumos'); y = 104; }
+  font('bold',11.5,NAVY); T('Los 10 productos más consumidos', m, y);
+  doc.autoTable({startY:y+8, margin:{left:m,right:m}, head:[['#','Producto','Consumido','En libras','vs mes anterior']],
+    body: top10.map((p,i)=>{ const prev = K.salP.filter(x=>x.c===p.c).reduce((a,x)=>a+x.q,0), v = pct(p.sal, prev);
+      return [String(i+1), pdfTxt(p.d), n0(p.sal)+' '+p.u, lbPer(p.c)?n0(p.sal*lbPer(p.c))+' lb':'—', v===null?'nuevo':(v>=0?'+':'')+corNum(v,1)+' %']; }),
+    styles:{fontSize:8, cellPadding:3.2, textColor:INK, lineColor:LINE, lineWidth:0.4}, headStyles:{fillColor:TEAL, textColor:255}, alternateRowStyles:{fillColor:SOFT},
+    columnStyles:{0:{cellWidth:20,halign:'center'},2:{halign:'right',cellWidth:72},3:{halign:'right',cellWidth:72},4:{halign:'right',cellWidth:80}} });
+  y = doc.lastAutoTable.finalY + 22;
+  const alertas = [...K.agot.filter(p=>p.sal||p.ent||p.si>0).map(p=>['Agotado', p.d, 'Stock al cierre '+n0(p.sf)+' '+p.u]),
+                   ...K.bajos.map(p=>['Cobertura baja', p.d, n0(p.cob)+' días de consumo (stock '+n0(p.sf)+' '+p.u+')'])];
+  if(alertas.length){
+    if(y > H-120){ doc.addPage(); header('Alertas'); y = 104; }
+    font('bold',11.5,RED); T('Alertas para reabastecer', m, y);
+    doc.autoTable({startY:y+8, margin:{left:m,right:m}, head:[['Tipo','Producto','Detalle']], body:alertas.map(r=>r.map(pdfTxt)),
+      styles:{fontSize:8, cellPadding:3.2, textColor:INK, lineColor:LINE, lineWidth:0.4}, headStyles:{fillColor:RED, textColor:255}, columnStyles:{0:{cellWidth:78,fontStyle:'bold'},2:{cellWidth:190}} });
+  }
+  footer();
+  const nombre = 'KPI_Bodega_GAMBIRASI_'+ym+'.pdf', blob = doc.output('blob');
+  kpiFile = new File([blob], nombre, {type:'application/pdf'});
+  openSheet(`<h2>Reporte de KPI listo</h2><p style="font-size:14px;color:var(--muted);margin:4px 0 12px">${esc(mesNombre(ym))} · ${doc.internal.getNumberOfPages()} página(s) · ${esc(nombre)}</p>
+    <div class="actions"><button class="btn ghost" onclick="kpiDescargar()">Descargar PDF</button><button class="btn primary" onclick="kpiCompartir()">Compartir por WhatsApp</button></div>`);
+}
+let kpiFile = null;
+function kpiDescargar(){ if(!kpiFile) return; const a = document.createElement('a'); a.href = URL.createObjectURL(kpiFile); a.download = kpiFile.name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1500); }
+async function kpiCompartir(){
+  if(!kpiFile) return; const text = 'Reporte mensual de KPI de bodega GAMBIRASI · '+mesNombre(ui.kpi.mes);
+  if(navigator.canShare && navigator.canShare({files:[kpiFile]})){ try{ await navigator.share({files:[kpiFile], text}); return; }catch(e){ if(e.name==='AbortError') return; } }
+  kpiDescargar(); window.open('https://wa.me/?text='+encodeURIComponent(text), '_blank', 'noopener'); toast('PDF descargado: adjúntalo en el chat de WhatsApp que se abrió');
+}
 function openRep(){ showRep(); }
 function rcSet(k,v){ ui.rc[k]=v; showRep(); }
 function showRep(){
@@ -1291,6 +1435,11 @@ function showRep(){
     <div class="set-block" style="padding:10px 0"><h3 style="font-size:16px">Saldo disponible</h3>
       <p style="font-size:14px;color:var(--muted)">Todos los productos con saldo mayor a cero (${conSaldo}), con código, descripción, unidad y saldo actual.</p>
       <button class="btn primary full" onclick="pdfSaldos()">Descargar PDF de saldos</button></div>
+    <div class="set-block" style="padding:10px 0"><h3 style="font-size:16px">Reporte mensual de KPI</h3>
+      <p style="font-size:14px;color:var(--muted)">Indicadores del mes: balanceado consumido (sacos y libras), promedio diario, cobertura, rotación, ingresos, salidas, agotados, consumo por piscina y detalle por producto. Para descargar o mandar por WhatsApp.</p>
+      <div class="row"><div class="field"><label>Mes</label><input type="month" value="${esc(ui.kpi.mes)}" onchange="ui.kpi.mes=this.value"></div>
+        <div class="field"><label>Elaborado por</label><input maxlength="60" value="${esc(ui.cr.elab||'')}" placeholder="Nombre" oninput="ui.cr.elab=this.value"></div></div>
+      <button class="btn primary full" onclick="pdfKPI()">Generar PDF de KPI</button></div>
     <div class="set-block" style="padding:10px 0"><h3 style="font-size:16px">Consumos diarios (formato CORREO)</h3>
       <p style="font-size:14px;color:var(--muted)">Formato de la hoja CORREO de NUBE: piscinas y precrías hacia los lados; hacia abajo solo los productos que salieron ese día (balanceado y luego insumos, de la A a la Z).</p>
       <div class="row"><div class="field"><label>Fecha</label><input type="date" value="${esc(ui.cr.fecha)}" onchange="ui.cr.fecha=this.value;showRep()"></div>

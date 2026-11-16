@@ -194,7 +194,7 @@ function sCount(o){ const r={}; if(o&&typeof o==='object') Object.keys(o).forEac
   if(x&&typeof x==='object') r[sStr(k,40)]={v:(x.v===null||x.v===''||x.v===undefined)?null:sNum(x.v), ts:sNum(x.ts), u:sMail(x.u)};
   else if(x!==''&&x!=null) r[sStr(k,40)]={v:sNum(x), ts:0, u:''}; }); return r; }
 function sProds(a){ return (Array.isArray(a)?a:[]).filter(p=>p&&p.c!=null&&p.c!=='').map(p=>{ const o={c:sStr(p.c,40),d:sStr(p.d),u:sStr(p.u,10)||'UND',i:sNum(p.i),min:Math.max(0,sNum(p.min))}; if(p.ts) o.ts=sNum(p.ts); return o; }); }
-function sUsers(a){ return (Array.isArray(a)?a:[]).map(x=>x&&typeof x==='object'?{email:sMail(x.email), nombre:sStr(x.nombre,60), file:sStr(x.file,150), activo:x.activo!==false, ts:sNum(x.ts)}:null).filter(x=>x&&x.email&&RX_FILE.test(x.file)); }
+function sUsers(a){ return (Array.isArray(a)?a:[]).map(x=>x&&typeof x==='object'?{email:sMail(x.email), nombre:sStr(x.nombre,60), file:sStr(x.file,150), activo:x.activo!==false, admin:x.admin===true, cargo:sStr(x.cargo,60), ts:sNum(x.ts)}:null).filter(x=>x&&x.email&&RX_FILE.test(x.file)); }
 function sMaster(s){   // inventario principal (lo escribe solo el administrador)
   if(!s||typeof s!=='object'||!Array.isArray(s.productos)) throw new Error('Archivo de datos no válido');
   return {v:3, productos:sProds(s.productos), entradas:sRecs(s.entradas), salidas:sRecs(s.salidas), conteo:sCount(s.conteo),
@@ -242,7 +242,10 @@ let saveTimer, syncing=false, syncErr=false;
 try{ localStorage.removeItem('inv_gambirasi_v1'); localStorage.removeItem('inv_skip'); }catch(e){}   // datos de la versión anterior (un solo usuario)
 
 const me = () => (od().user||'').toLowerCase();
-const isAdmin = () => od().role==='admin';
+const isOwner = () => od().role==='admin';   // dueño de la carpeta compartida (cuenta principal)
+const coAdmin = () => { const e = me(); return !!e && (D.master.usuarios||[]).some(u=>u.email===e && u.activo && u.admin); };
+const isAdmin = () => isOwner() || coAdmin();   // administradores: el dueño y los usuarios marcados como administrador (registran con su nombre)
+function needOwner(){ if(isOwner()) return true; toast('Solo la cuenta principal puede administrar usuarios'); return false; }
 const regKey = email => String(email||'').toLowerCase().replace(/[^a-z0-9]/g,'_')+'.json';
 const fileOwner = f => { const u=D.master.usuarios.find(x=>x.file===f); return u?u.email:''; };
 function userName(email){
@@ -1073,13 +1076,14 @@ function lineasFuel(f){
 const piscOut = d => d==='09B' ? '9B' : (d||'');
 function openCierre(){
   if(!icatOk()) return toast('Primero carga el catálogo de indirectos (Ajustes)');
-  const f = icie.f, li = lineasInd(f), lf = lineasFuel(f), I = IND(), cfg = icfg();
+  const f = icie.f, li = lineasInd(f), lf = lineasFuel(f), I = IND(), cfg = Object.assign({}, icfg()), yo = (D.master.usuarios||[]).find(u=>u.email===me());
+  if(yo && yo.cargo) cfg.elab = {n:(yo.nombre||'').toUpperCase(), c:yo.cargo.toUpperCase()};
   const lg = I.lec.find(x=>x.t==='gen'&&x.f===f), lb = I.lec.find(x=>x.t==='bom'&&x.f===f);
   openSheet(`<h2>Cierre del día</h2>
     <div class="field"><label>Fecha</label><input type="date" value="${esc(f)}" onchange="icie.f=this.value;openCierre()"></div>
     <div class="info" style="margin:0 0 10px">Material indirecto: <b>${li.length}</b> línea(s) · Combustible: <b>${lf.length}</b> línea(s), ${fmt(lf.reduce((a,x)=>a+x.q,0))} gal
       ${!lg||!lb?`<br><b style="color:var(--warn)">Falta la lectura de ${[!lg?'generadores':'',!lb?'estación de bombeo':''].filter(Boolean).join(' y ')}.</b>`:''}</div>
-    <div class="field"><label>Elaborado por</label><div class="row"><input id="cen" value="${esc(cfg.elab.n)}" ${isAdmin()?'':'disabled'}><input id="cec" value="${esc(cfg.elab.c)}" ${isAdmin()?'':'disabled'}></div></div>
+    <div class="field"><label>Elaborado por</label><div class="row"><input id="cen" value="${esc(cfg.elab.n)}"><input id="cec" value="${esc(cfg.elab.c)}"></div></div>
     <div class="field"><label>Revisa y autoriza</label><select id="caut" onchange="icie.aut=+this.value">${cfg.firmas.map((x,i)=>`<option value="${i}"${i===icie.aut?' selected':''}>${esc(x.n)} · ${esc(x.c)}</option>`).join('')}</select></div>
     ${isAdmin()?`<details style="margin:-4px 0 12px"><summary style="cursor:pointer;color:var(--brand);font-weight:600">Agregar otra persona que revisa y autoriza</summary><div class="row" style="margin-top:8px"><input id="cfn" placeholder="Nombre"><input id="cfc" placeholder="Cargo"></div><button class="btn ghost full" style="margin-top:8px" onclick="iFirmaAdd()">Agregar</button></details>`:''}
     <h3 style="font-size:15px;margin:6px 0">Archivos para subir al sistema (hoja1, sin formato)</h3>
@@ -1101,7 +1105,8 @@ async function iXlsx(k){
   XLSX.writeFile(wb, (k==='i'?'CONSUMO DIARIO INDIRECTOS ':'CONSUMO DIARIO DE COMBUSTIBLE ')+f+'.xlsx');
   toast('Archivo descargado: '+L.length+' línea(s)'); }
 async function iPdf(k){
-  iCfgSave(); const f = icie.f, L = k==='i' ? lineasInd(f) : lineasFuel(f), cfg = icfg(), aut = cfg.firmas[icie.aut] || cfg.firmas[0];
+  const f = icie.f, L = k==='i' ? lineasInd(f) : lineasFuel(f), cfg = Object.assign({}, icfg()), aut = cfg.firmas[icie.aut] || cfg.firmas[0];
+  if($('#cen') && $('#cen').value.trim()) cfg.elab = {n:$('#cen').value.trim().toUpperCase(), c:$('#cec').value.trim().toUpperCase()};
   if(!L.length) return toast('No hay '+(k==='i'?'egresos de material indirecto':'consumo de combustible')+' el '+fdate(f));
   try{ await loadPDF(); }catch(e){ return toast(e.message); }
   const doc = new window.jspdf.jsPDF({unit:'pt', format:'a4', orientation:'landscape'}), W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), m = 28;
@@ -1236,7 +1241,7 @@ function vSet(){
   const o = od(), on = !!o.token, adm = isAdmin();
   const btn = 'min-height:38px;padding:6px 12px;font-size:14px';
   return `
-  <div class="top"><div><h1>Ajustes</h1><small>${on?(adm?'Administrador':'Operador'):'Sin sesión'}</small></div>${syncChip()}</div>
+  <div class="top"><div><h1>Ajustes</h1><small>${on?(isOwner()?'Administrador · cuenta principal':adm?'Administrador':'Operador'):'Sin sesión'}</small></div>${syncChip()}</div>
   <div class="card">
     <div class="set-block"><h3>Mi cuenta</h3>
       <p>${on?'<b>'+esc(userName(me()))+'</b><br><span style="color:var(--muted);font-size:13px">'+esc(o.user||'')+'</span>':'No has iniciado sesión.'}</p>
@@ -1248,7 +1253,7 @@ function vSet(){
       </div>
       ${on&&!adm&&curScope()!==SCOPE_ALL?'<div class="info bad" style="margin-top:10px">Aún no tienes acceso a la carpeta compartida.'+(o.needApproval?' Microsoft indica que falta la aprobación del administrador de sistemas de la empresa.':'')+'</div><button class="btn primary full" style="margin-top:8px" onclick="requestShared()">Solicitar acceso</button>':''}
       ${o.last?'<p style="font-size:13px;color:var(--muted);margin-top:8px">Última sincronización: '+esc(fdt(o.last))+'</p>':''}</div>
-    ${adm?usersBlock(btn):''}
+    ${isOwner()?usersBlock(btn):''}
     ${adm?xlBlock(btn):''}
     ${adm?`<div class="set-block"><h3>Material indirecto</h3>
       <p style="font-size:14px">${icatOk()?`Catálogo cargado: <b>${ICAT.prods.length}</b> productos · <b>${(ICAT.eqs||[]).length}</b> equipos · aforo generadores ${ICAT.aforo&&ICAT.aforo.gen?'✓':'✗'} · aforo bombeo ${ICAT.aforo&&ICAT.aforo.bom?'✓':'✗'}${ICAT.ts?'<br><span style="color:var(--muted);font-size:13px">Actualizado '+esc(fdt(ICAT.ts))+'</span>':''}`:'Todavía no hay catálogo.'}</p>
@@ -1274,12 +1279,14 @@ function usersBlock(btn){
   const us = D.master.usuarios.slice().sort((a,b)=>(b.activo-a.activo)||a.nombre.localeCompare(b.nombre,'es'));
   const last = {}; [...S.entradas,...S.salidas].forEach(m=>{ if(m.u&&(!last[m.u]||m.ts>last[m.u])) last[m.u]=m.ts; });
   return `<div class="set-block"><h3>Usuarios (${us.filter(u=>u.activo).length} con acceso)</h3>
-    <p style="font-size:14px">Cada persona entra con <b>su propio correo</b> y todo lo que registra queda con su nombre. Los usuarios solo pueden registrar; editar y eliminar es exclusivo tuyo.</p>
+    <p style="font-size:14px">Cada persona entra con <b>su propio correo</b> y todo lo que registra queda con su nombre. Los <b>usuarios</b> solo registran; los <b>administradores</b> además editan y eliminan, como tú. Agregar o quitar usuarios es exclusivo de esta cuenta principal.</p>
     <div class="card list" style="margin:10px 0">${us.map(u=>`<div class="item" style="cursor:default">
-      <div class="main"><div class="name">${esc(u.nombre||u.email)}</div><div class="sub">${esc(u.email)}<br>${u.activo?'Con acceso':'Sin acceso'}${last[u.email]?' · último registro '+esc(fdt(last[u.email])):''}</div></div>
-      ${u.activo?`<button class="btn danger" style="${btn}" onclick="removeUser(${jsa(u.email)})">Quitar</button>`:`<button class="btn ghost" style="${btn}" onclick="reAddUser(${jsa(u.email)})">Reactivar</button>`}</div>`).join('') || '<div class="empty">Todavía no has agregado usuarios.</div>'}</div>
+      <div class="main"><div class="name">${esc(u.nombre||u.email)}</div><div class="sub">${esc(u.email)}${u.cargo?'<br>'+esc(u.cargo):''}<br>${u.activo?(u.admin?'<b style="color:var(--brand)">Administrador</b>':'Usuario'):'Sin acceso'}${last[u.email]?' · último registro '+esc(fdt(last[u.email])):''}</div></div>
+      <div style="display:grid;gap:6px;flex:none">${u.activo?`<button class="btn ghost" style="${btn}" onclick="setAdmin(${jsa(u.email)},${!u.admin})">${u.admin?'Quitar admin':'Hacer admin'}</button><button class="btn ghost" style="${btn}" onclick="setCargo(${jsa(u.email)})">Cargo</button><button class="btn danger" style="${btn}" onclick="removeUser(${jsa(u.email)})">Quitar</button>`:`<button class="btn ghost" style="${btn}" onclick="reAddUser(${jsa(u.email)})">Reactivar</button>`}</div></div>`).join('') || '<div class="empty">Todavía no has agregado usuarios.</div>'}</div>
     <div class="field"><label>Nombre y apellido</label><input id="un" maxlength="60" placeholder="Ej. Juan Pérez" autocomplete="off"></div>
     <div class="field"><label>Correo de Microsoft de la persona</label><input id="ue" type="email" maxlength="120" placeholder="nombre@acuariosdelgolfo.com o @outlook.com" autocomplete="off"></div>
+    <div class="field"><label>Cargo (opcional)</label><input id="ucar" maxlength="60" placeholder="Ej. Bodeguero principal material directo" autocomplete="off"></div>
+    <label style="display:flex;gap:10px;align-items:center;font-size:14px;margin:0 0 10px"><input type="checkbox" id="uadm"> Administrador (puede editar y eliminar; registra con su nombre)</label>
     <button id="ubtn" class="btn primary full" onclick="addUser()">Agregar usuario</button>
     <p style="font-size:13px;color:var(--muted);margin-top:8px">Le llegará un correo con el link de la app. Si es una cuenta personal (Outlook/Hotmail) y Microsoft rechaza la invitación, primero hay que invitarla como "usuario externo" en Microsoft Entra (ver manual).</p></div>`;
 }
@@ -1582,7 +1589,7 @@ function repSub(c){ return ['Del '+fdate(c.desde)+' al '+fdate(c.hasta)+' · '+t
    fecha elegida (balanceado A-Z, luego insumos A-Z). El No. aumenta 1 por día (13/10/2026 = 2233). */
 const CORREO_ORDEN = ['00577','03351','03473','00743','03567','03518','03521','00651','00653','00759','00670','02919','03397','00394','00475','02448','00585','03328','03236','00400','00643','00506','00239','03235','03214','03329','00707','00403','00476','00273','02949','00494','03326','00308','03358'];
 const CORREO_FIRMAS = [['Revisado por :','YEISON RODRIGUEZ','Producción'],['Aprobado por:','DIEGO TORRES','Administración'],['Recibido por:','KERLY MALDONADO','Contabilidad']];
-ui.cr = ui.cr || {fecha: todayISO(), elab: (()=>{ try{ return localStorage.getItem('inv_elab')||''; }catch(e){ return ''; } })()};
+ui.cr = ui.cr || {fecha: todayISO(), elab: (()=>{ try{ return localStorage.getItem('inv_elab')||''; }catch(e){ return ''; } })() || (((D.master.usuarios||[]).find(u=>u.email===me())||{}).nombre||'')};
 function codigosXL(){ try{ return JSON.parse(localStorage.getItem('inv_codigos')||'{}')||{}; }catch(e){ return {}; } }
 function correoDatos(fecha){
   const M = {}, filas = [...PSC, ...PRE];
@@ -2214,9 +2221,10 @@ async function autoSync(manual){
   syncing = true; syncErr = false; paintChip();
   try{
     if(!od().role) await detectRole();
-    const admin = isAdmin();
+    let admin = isAdmin();
     await syncMaster(admin);
-    if(!admin) await syncMine();
+    if(!admin || D.dirtyMine) await syncMine();
+    if(!admin && isAdmin()){ admin = true; await syncMaster(true); }   // lo acaban de nombrar administrador
     await syncRegs(admin);
     derive(); persist(); odSet({last:Date.now()});
     if(admin) await excelSync(manual);
@@ -2442,8 +2450,8 @@ async function ensureRegDir(){
   return graph(itemUrl(SHARED.folder)+'/children', {method:'POST', headers:J, body:JSON.stringify({name:REG_DIR, folder:{}, '@microsoft.graph.conflictBehavior':'fail'})});
 }
 async function addUser(){
-  if(!needAdmin()) return;
-  const nombre = sStr($('#un').value.trim(),60), email = sMail($('#ue').value);
+  if(!needOwner()) return;
+  const nombre = sStr($('#un').value.trim(),60), email = sMail($('#ue').value), esAdm = !!($('#uadm')&&$('#uadm').checked), cargo = sStr(($('#ucar')&&$('#ucar').value||'').trim(),60);
   if(!nombre || !email) return toast('Escribe el nombre y un correo válido');
   if(email===me()) return toast('Ese es tu propio correo de administrador');
   if(!navigator.onLine) return toast('Necesitas internet para agregar usuarios');
@@ -2454,11 +2462,11 @@ async function addUser(){
     let f = await graph(ip(REG_DIR+'/'+file));
     if(!f) f = await graph(ip(REG_DIR+'/'+file)+':/content', {method:'PUT', headers:J, body:JSON.stringify({entradas:[],salidas:[],conteo:{}})});
     const msg = 'Hola '+nombre+', te doy acceso a la app de inventario de bodega GAMBIRASI. Ábrela en '+APP_URL+' e inicia sesión con este mismo correo ('+email+').';
-    await graph(itemUrl(SHARED.folder)+'/invite', {method:'POST', headers:J, body:JSON.stringify({recipients:[{email}], requireSignIn:true, sendInvitation:true, roles:['read'], message:msg})});
+    await graph(itemUrl(SHARED.folder)+'/invite', {method:'POST', headers:J, body:JSON.stringify({recipients:[{email}], requireSignIn:true, sendInvitation:true, roles:[esAdm?'write':'read'], message:msg})});
     await graph(itemUrl(f.id)+'/invite', {method:'POST', headers:J, body:JSON.stringify({recipients:[{email}], requireSignIn:true, sendInvitation:false, roles:['write']})});
     try{ const fd = await graph(ip(FOTO_DIR)); if(fd){ await graph(itemUrl(fd.id)+'/invite', {method:'POST', headers:J, body:JSON.stringify({recipients:[{email}], requireSignIn:true, sendInvitation:false, roles:['write']})}); const dn=JSON.parse(localStorage.getItem('inv_fotos_perm')||'{}'); dn[email]=Date.now(); localStorage.setItem('inv_fotos_perm', JSON.stringify(dn)); } }catch(e){}
     const now = Date.now(), ex = D.master.usuarios.find(u=>u.email===email);
-    if(ex) Object.assign(ex, {nombre, file, activo:true, ts:now}); else D.master.usuarios.push({email, nombre, file, activo:true, ts:now});
+    if(ex) Object.assign(ex, {nombre, file, activo:true, admin:esAdm, cargo, ts:now}); else D.master.usuarios.push({email, nombre, file, activo:true, admin:esAdm, cargo, ts:now});
     save('master'); await autoSync(); render(); toast('Usuario agregado. Le llegará un correo con el link.');
   }catch(e){
     if(/shar|compart|invit/i.test(e.message) && !/@acuariosdelgolfo\.com$/.test(email)){
@@ -2473,12 +2481,26 @@ async function addUser(){
   }
   finally{ const b2=$('#ubtn'); if(b2){ b2.disabled=false; b2.textContent='Agregar usuario'; } }
 }
-function reAddUser(email){ const u = D.master.usuarios.find(x=>x.email===email); if(!u) return; $('#un').value=u.nombre; $('#ue').value=u.email; addUser(); }
+function reAddUser(email){ const u = D.master.usuarios.find(x=>x.email===email); if(!u) return; $('#un').value=u.nombre; $('#ue').value=u.email; $('#uadm').checked=!!u.admin; $('#ucar').value=u.cargo||''; addUser(); }
+async function setAdmin(email, on){   // da o quita permiso de escritura en toda la carpeta compartida
+  if(!needOwner()) return; const u = D.master.usuarios.find(x=>x.email===email); if(!u) return;
+  if(!confirm(on ? userName(email)+' podrá registrar, editar y eliminar todo (con su nombre), igual que tú. ¿Continuar?' : '¿Quitar los permisos de administrador a '+userName(email)+'? Seguirá como usuario normal.')) return;
+  if(!navigator.onLine) return toast('Necesitas internet');
+  try{
+    const ps = await graph(itemUrl(SHARED.folder)+'/permissions');
+    for(const p of (ps&&ps.value)||[]){ if(p.inheritedFrom || (p.roles||[]).includes('owner')) continue; if(permEmails(p).includes(email)) await graph(itemUrl(SHARED.folder)+'/permissions/'+p.id, {method:'DELETE'}); }
+    await graph(itemUrl(SHARED.folder)+'/invite', {method:'POST', headers:J, body:JSON.stringify({recipients:[{email}], requireSignIn:true, sendInvitation:false, roles:[on?'write':'read']})});
+    u.admin = !!on; u.ts = Date.now(); save('master'); await autoSync(); render(); toast(on?'Ahora es administrador':'Permisos de administrador retirados');
+  }catch(e){ toast('No se pudo cambiar: '+e.message); }
+}
+function setCargo(email){ if(!needOwner()) return; const u = D.master.usuarios.find(x=>x.email===email); if(!u) return;
+  const c = prompt('Cargo de '+userName(email)+' (sale en los reportes y formatos):', u.cargo||''); if(c===null) return;
+  u.cargo = sStr(c.trim(),60); u.ts = Date.now(); save('master'); render(); }
 function permEmails(p){ const out=[], push=x=>{ if(x&&x.user&&x.user.email) out.push(String(x.user.email).toLowerCase()); };
   push(p.grantedToV2); push(p.grantedTo); (p.grantedToIdentitiesV2||[]).forEach(push); (p.grantedToIdentities||[]).forEach(push);
   if(p.invitation&&p.invitation.email) out.push(String(p.invitation.email).toLowerCase()); return out; }
 async function removeUser(email){
-  if(!needAdmin()) return;
+  if(!needOwner()) return;
   if(!confirm('¿Quitar el acceso a '+userName(email)+'? Sus registros anteriores se conservan.')) return;
   if(!navigator.onLine) return toast('Necesitas internet para quitar usuarios');
   try{
@@ -2491,7 +2513,7 @@ async function removeUser(email){
       for(const p of (ps&&ps.value)||[]){ if(p.inheritedFrom || (p.roles||[]).includes('owner')) continue;
         if(permEmails(p).includes(email)) await graph(itemUrl(id)+'/permissions/'+p.id, {method:'DELETE'}); }
     }
-    u.activo=false; u.ts=Date.now(); save('master'); await autoSync(); render(); toast('Acceso retirado');
+    u.activo=false; u.admin=false; u.ts=Date.now(); save('master'); await autoSync(); render(); toast('Acceso retirado');
   }catch(e){ toast('Error: '+e.message); }
 }
 async function odSync(){ await autoSync(true); }

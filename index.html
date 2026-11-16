@@ -152,6 +152,7 @@ code{background:var(--brand-soft);padding:1px 6px;border-radius:6px;font-size:13
 <div class="scrim" id="scrim" onclick="closeSheet()"></div>
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"></div>
 <div class="toast" id="toast"></div>
+<input id="icatf" type="file" accept=".xlsx,.xlsm,.xls" multiple style="display:none" onchange="icatImport(this)">
 <input type="file" id="filex" accept=".xlsx,.xlsm,.xls,.json" hidden>
 <input type="file" id="filec" accept=".xlsx,.xlsm,.xls,.csv" hidden>
 
@@ -197,7 +198,7 @@ function sUsers(a){ return (Array.isArray(a)?a:[]).map(x=>x&&typeof x==='object'
 function sMaster(s){   // inventario principal (lo escribe solo el administrador)
   if(!s||typeof s!=='object'||!Array.isArray(s.productos)) throw new Error('Archivo de datos no válido');
   return {v:3, productos:sProds(s.productos), entradas:sRecs(s.entradas), salidas:sRecs(s.salidas), conteo:sCount(s.conteo),
-    del:sMap(s.del,sNum), usuarios:sUsers(s.usuarios), conteoReset:sNum(s.conteoReset), admin:sMail(s.admin), gen:sStr(s.gen,40), traspasos:sTras(s.traspasos)};
+    del:sMap(s.del,sNum), usuarios:sUsers(s.usuarios), conteoReset:sNum(s.conteoReset), admin:sMail(s.admin), gen:sStr(s.gen,40), traspasos:sTras(s.traspasos), ind:sInd(s.ind)};
 }
 function sTras(a){ return (Array.isArray(a)?a:[]).filter(x=>x&&RX_ID.test(x.id)&&RX_DT.test(x.fecha)&&RX_DT.test(x.desde)&&RX_DT.test(x.hasta)).map(x=>({
   id:x.id, fecha:x.fecha, origen:sStr(x.origen,40), desde:x.desde, hasta:x.hasta,
@@ -226,7 +227,7 @@ function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('sh
    D.regs   : copia local de los archivos de los demás usuarios
    S        : vista combinada que usa la interfaz (se recalcula con derive())        */
 const KEY = 'inv_gambirasi_v3', KEY_OD = 'inv_gambirasi_od';
-function emptyMaster(){ return {v:3, productos:[], entradas:[], salidas:[], conteo:{}, del:{}, usuarios:[], conteoReset:0, admin:'', gen:'', traspasos:[]}; }
+function emptyMaster(){ return {v:3, productos:[], entradas:[], salidas:[], conteo:{}, del:{}, usuarios:[], conteoReset:0, admin:'', gen:'', traspasos:[], ind:emptyInd()}; }
 function emptyD(){ return {master:emptyMaster(), mine:sReg({}), regs:{}, etags:{}, owner:'', dirtyMaster:false, dirtyMine:false, forceMaster:false, rev:0, updated:'', syncedAt:0}; }
 function loadD(){
   try{ const r=localStorage.getItem(KEY); if(r){ const j=JSON.parse(r), d=emptyD();
@@ -308,12 +309,12 @@ const IC = {
 
 /* ---------- navegación ---------- */
 let view = 'home';
-let ui = { q:'', filt:'all', mtipo:'e', mq:'', mdesde:'', mhasta:'', mlimit:80, cq:'', cfilt:'all' };
+let ui = { mod:(()=>{ try{ return localStorage.getItem('inv_mod')==='i'?'i':''; }catch(e){ return ''; } })(), q:'', filt:'all', mtipo:'e', mq:'', mdesde:'', mhasta:'', mlimit:80, cq:'', cfilt:'all' };
 function go(v){ view = v; window.scrollTo(0,0); render(); }
 function renderNav(){
   const t = (id,label,icon) => `<button class="${view===id?'on':''}" onclick="go('${id}')">${IC[icon]}<span>${label}</span></button>`;
   $('#nav').innerHTML = t('home','Inicio','home') + t('prod','Productos','box') +
-    `<button class="add" onclick="openMove()" aria-label="Registrar movimiento"><span class="fab">${IC.plus}</span></button>` +
+    `<button class="add" onclick="${view==='home'&&ui.mod==='i'?'openIMenu()':'openMove()'}" aria-label="Registrar movimiento"><span class="fab">${IC.plus}</span></button>` +
     t('mov','Movimientos','swap') + t('count','Conteo','check');
 }
 function render(){
@@ -339,6 +340,8 @@ function chipInfo(){
 function syncChip(){ const c=chipInfo(); return `<button id="schip" class="chip-sync" onclick="go('set')"><span class="dot ${c.cls}"></span>${c.t}</button>`; }
 function paintChip(){ const b=$('#schip'); if(!b) return; const c=chipInfo(); b.innerHTML=`<span class="dot ${c.cls}"></span>${c.t}`; }
 
+function modSwitch(){ return `<div class="seg" style="margin:0 0 12px"><button class="${ui.mod!=='i'?'on':''}" onclick="modSet('')">Material directo</button><button class="${ui.mod==='i'?'on':''}" onclick="modSet('i')">Material indirecto</button></div>`; }
+function modSet(m){ ui.mod = m; try{ localStorage.setItem('inv_mod', m); }catch(e){} window.scrollTo(0,0); render(); }
 function vHome(){
   const m = calc(), arr = [...m.values()];
   const agot = arr.filter(x=>x.stock<=0), bajo = arr.filter(x=>x.stock>0 && x.p.min>0 && x.stock<x.p.min);
@@ -346,8 +349,10 @@ function vHome(){
   const eH = S.entradas.filter(e=>e.f===hoy).length, sH = S.salidas.filter(e=>e.f===hoy).length;
   const attn = [...agot, ...bajo].slice(0,6);
   const last = [...S.entradas.map(e=>({...e,t:'e'})), ...S.salidas.map(e=>({...e,t:'s'}))].sort((a,b)=> b.f.localeCompare(a.f)).slice(0,6);
+  if(ui.mod==='i') return `<div class="top"><div><h1>Material indirecto</h1><small>Gambirasi · ${fdate(hoy)}</small></div>${syncChip()}</div>${modSwitch()}${vInd()}`;
   return `
   <div class="top"><div><h1>Inventario</h1><small>Gambirasi · ${fdate(hoy)}</small></div>${syncChip()}</div>
+  ${modSwitch()}
   <div class="grid2">
     <div class="card kpi tap" onclick="ui.filt='all';go('prod')"><b>${arr.length}</b><span>Productos</span></div>
     <div class="card kpi tap bad" onclick="ui.filt='agot';go('prod')"><b>${agot.length}</b><span>Agotados</span></div>
@@ -527,7 +532,7 @@ function fotoAdd(inp){
 function fotoDel(i){ const f = mv.fotos[i]; if(f) URL.revokeObjectURL(f.url); mv.fotos.splice(i,1); fotoPaint(); }
 
 // ---- foto con el detalle impreso en la base
-function fotoInfo(recs){ recs = [].concat(recs); const r = recs[0]; return {items: recs.map(x=>({prod:pName(x.c)+' ('+x.c+')', cant:'+'+fmt(x.q)+' '+pUnit(x.c)})), doc: r.doc||'—', fecha: fdate(r.f), quien: userName(r.u), hora: new Date(r.ts).toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})}; }
+function fotoInfo(recs, mod){ recs = [].concat(recs); const r = recs[0], N = mod==='i'?iName:pName, U = mod==='i'?iUnit:pUnit; return {title: mod==='i'?'INGRESO MATERIAL INDIRECTO · GAMBIRASI':'', items: recs.map(x=>({prod:N(x.c)+' ('+x.c+')', cant:'+'+fmt(x.q)+' '+U(x.c)})), doc: r.doc||'—', fecha: fdate(r.f), quien: userName(r.u), hora: new Date(r.ts).toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})}; }
 async function stampFoto(file, info, k, n){
   let bm; try{ bm = await createImageBitmap(file, {imageOrientation:'from-image'}); }catch(e){ bm = await createImageBitmap(file); }
   const sc = Math.min(1, 1600/Math.max(bm.width, bm.height)), w = Math.round(bm.width*sc), h = Math.round(bm.height*sc);
@@ -539,9 +544,9 @@ async function stampFoto(file, info, k, n){
   x.fillStyle = '#0e3461'; x.fillRect(0, h, w, band); x.fillStyle = '#1e9690'; x.fillRect(0, h, w, Math.max(4, Math.round(fs*0.25)));
   const fit = (t, max) => { if(x.measureText(t).width<=max) return t; while(t.length>3 && x.measureText(t+'…').width>max) t = t.slice(0,-1); return t+'…'; };
   let y = h + pad + fs; const L = pad, R = w - pad, F = (wt,sz) => wt+' '+Math.round(sz)+'px system-ui, Arial, sans-serif';
-  x.textBaseline = 'alphabetic'; x.fillStyle = '#ffffff'; x.font = F(700,fs); x.fillText('INGRESO DE BODEGA · GAMBIRASI', L, y);
+  x.textBaseline = 'alphabetic'; x.fillStyle = '#ffffff'; x.font = F(700,fs); x.fillText(fit(info.title||'INGRESO DE BODEGA · GAMBIRASI', R-L-fs*7), L, y);
   x.font = F(600,fs*0.85); x.textAlign = 'right'; x.fillStyle = '#b4dcec'; x.fillText('Foto '+k+' de '+n, R, y); x.textAlign = 'left';
-  y += lh; x.fillStyle = '#b4dcec'; x.font = F(600,fs); x.fillText(fit('Guía / Doc: '+info.doc+'   ·   '+its.length+' producto'+(its.length>1?'s':''), R-L), L, y);
+  y += lh; x.fillStyle = '#b4dcec'; x.font = F(600,fs); x.fillText(fit(info.sub || ('Guía / Doc: '+info.doc+'   ·   '+its.length+' producto'+(its.length>1?'s':'')), R-L), L, y);
   x.font = F(400,fs);
   show.forEach(it=>{ y += lh; x.fillStyle = '#ffffff'; x.textAlign = 'right'; x.font = F(700,fs); const cw = x.measureText(it.cant).width; x.fillText(it.cant, R, y);
     x.textAlign = 'left'; x.font = F(400,fs); x.fillText(fit(it.prod, R-L-cw-fs), L, y); });
@@ -549,14 +554,14 @@ async function stampFoto(file, info, k, n){
   y += lh; x.fillStyle = '#d7e2ec'; x.fillText(fit('Fecha: '+info.fecha+'   ·   Registró: '+info.quien+' · '+info.hora, R-L), L, y);
   return await new Promise(r=>c.toBlob(r, 'image/jpeg', 0.82));
 }
-function fotoTexto(info){ return '*Ingreso de bodega GAMBIRASI*\nGuía / Doc: '+info.doc+'\nFecha: '+info.fecha+'\n'+info.items.map((it,i)=>(i+1)+'. '+it.prod+': *'+it.cant+'*').join('\n')+'\nRegistró: '+info.quien+' · '+info.hora; }
+function fotoTexto(info){ return '*'+(info.title?info.title.replace(/ · /g,' - '):'Ingreso de bodega GAMBIRASI')+'*\n'+(info.sub?info.sub:'Guía / Doc: '+info.doc)+'\nFecha: '+info.fecha+'\n'+info.items.map((it,i)=>(i+1)+'. '+it.prod+': *'+it.cant+'*').join('\n')+'\nRegistró: '+info.quien+' · '+info.hora; }
 
 // ---- después de guardar la entrada
 let fotoShare = {files:[], text:'', urls:[]};
-async function fotoProcesar(recs, fotos){
+async function fotoProcesar(recs, fotos, info0){
   recs = [].concat(recs);
-  openSheet(`<h2>Ingreso registrado</h2><div class="info">Preparando ${fotos.length} foto(s)…</div>`);
-  const info = fotoInfo(recs), names = fotoNames(recs[0]), files = [];
+  openSheet(`<h2>${info0?'Lectura guardada':'Ingreso registrado'}</h2><div class="info">Preparando ${fotos.length} foto(s)…</div>`);
+  const info = info0 || fotoInfo(recs, mv&&mv.mod), names = fotoNames(recs[0]), files = [];
   for(let i=0;i<fotos.length;i++){
     const blob = await stampFoto(fotos[i].file, info, i+1, fotos.length); URL.revokeObjectURL(fotos[i].url);
     files.push(new File([blob], names[i], {type:'image/jpeg'}));
@@ -564,7 +569,7 @@ async function fotoProcesar(recs, fotos){
   }
   fotoShare.urls.forEach(u=>URL.revokeObjectURL(u));
   fotoShare = {files, text:fotoTexto(info), urls:files.map(f=>URL.createObjectURL(f))};
-  fotoShow(recs.length>1?'Ingreso registrado: '+recs.length+' productos':'Entrada registrada', files.length+' foto(s) con el detalle en la base. Se guardan '+FOTO_DIAS+' días en el OneDrive.');
+  fotoShow(info0?'Lectura guardada':recs.length>1?'Ingreso registrado: '+recs.length+' productos':'Entrada registrada', files.length+' foto(s) con el detalle en la base. Se guardan '+FOTO_DIAS+' días en el OneDrive.');
   if(navigator.onLine) fotoFlush();
 }
 function fotoShow(title, sub){
@@ -638,17 +643,23 @@ async function fotoAdmin(){   // carpeta, permiso de escritura para los usuarios
    stock, los reportes y el Excel siguen igual) y todas comparten el campo g (id del ingreso), el número
    de documento, la fecha y las fotos. Solo el administrador puede modificar o eliminar un ingreso.   */
 const ING_MAX = 100;
-const grupoE = m => m && m.g ? S.entradas.filter(x=>x.g===m.g) : (m ? [m] : []);
-function openIngreso(c, id){
+const grupoE = m => { if(!m) return []; if(!m.g) return [m]; const L = (D.master.ind && D.master.ind.ent.includes(m)) || IND().ent.some(x=>x.id===m.id) ? IND().ent : S.entradas; return L.filter(x=>x.g===m.g); };
+let INGP = null;
+function ING(){ if(mv && mv.mod==='i'){ if(!INGP || INGP.src!==ICAT) INGP = {src:ICAT, list:((ICAT&&ICAT.prods)||[]).map(([c,n,u])=>({c, d:n, u}))};
+    return {ents:IND().ent, name:iName, unit:iUnit, stock:iStock, prods:INGP.list}; }
+  return {ents:S.entradas, name:pName, unit:pUnit, stock:c=>{ const x = calc().get(c); return x?x.stock:0; }, prods:S.productos}; }
+function openIngreso(c, id, mod){
   if(id && !isAdmin()) return toast('Solo el administrador puede modificar ingresos');
+  if(mod==='i' && !iWrite()) return;
   if(mv && mv.fotos) mv.fotos.forEach(f=>URL.revokeObjectURL(f.url));
+  mv = {mod:mod||''};
   let lines = [{c:c||'', q:''}], f = todayISO(), doc = '', g = null, old = [];
-  if(id){ const m = S.entradas.find(x=>x.id===id); if(!m) return; old = grupoE(m); lines = old.map(x=>({c:x.c, q:String(x.q)})); f = m.f; doc = m.doc||''; g = m.g||null; }
-  mv = {t:'e', c:'', id:id||null, doc:'', fotos:[], lines, old:old.map(x=>x.id), g};
+  if(id){ const m = ING().ents.find(x=>x.id===id); if(!m) return; old = grupoE(m); lines = old.map(x=>({c:x.c, q:String(x.q)})); f = m.f; doc = m.doc||''; g = m.g||null; }
+  mv = {t:'e', c:'', id:id||null, doc:'', fotos:[], lines, old:old.map(x=>x.id), g, mod:mod||''};
   openSheet(`
-    <h2>${id?'Modificar ingreso':'Registrar movimiento'}</h2>
+    <h2>${id?'Modificar ingreso':mod==='i'?'Ingreso de material indirecto':'Registrar movimiento'}</h2>
     ${id?`<p style="font-size:14px;color:var(--muted);margin:4px 0 8px">Guía con ${old.length} producto(s), registrada por ${esc(userName(old[0].u))}. Los cambios quedan a nombre del administrador.</p>`
-       :`<div class="seg" style="margin:10px 0"><button id="tE" class="on" onclick="mvTipo('e')">Entrada</button><button id="tS" onclick="mvTipo('s')">Salida</button></div>`}
+       :mod==='i'?'':`<div class="seg" style="margin:10px 0"><button id="tE" class="on" onclick="mvTipo('e')">Entrada</button><button id="tS" onclick="mvTipo('s')">Salida</button></div>`}
     <div class="row"><div class="field"><label>Fecha</label><input id="mf" type="date" value="${esc(f)}"></div>
     <div class="field"><label>Nro. documento (guía)</label><input id="md" maxlength="40" value="${esc(doc)}" placeholder="Factura o guía"></div></div>
     <div class="field"><label>Productos <span id="mcount" style="font-weight:400;color:var(--muted)"></span></label><div id="mlines"></div>
@@ -660,20 +671,20 @@ function openIngreso(c, id){
   if(!c && !id) setTimeout(()=>{ const i=$('#lp0'); if(i) i.focus(); }, 50);
 }
 function lnStock(c){   // stock actual sin contar las líneas del ingreso que se está modificando
-  const x = calc().get(c); if(!x) return 0; let s = x.stock;
-  (mv.old||[]).forEach(id=>{ const m = S.entradas.find(e=>e.id===id); if(m && m.c===c) s -= m.q; }); return s;
+  const A = ING(); let s = A.stock(c);
+  (mv.old||[]).forEach(id=>{ const m = A.ents.find(e=>e.id===id); if(m && m.c===c) s -= m.q; }); return s;
 }
 function lnInfo(i){
   const l = mv.lines[i], el = $('#li'+i); if(!el) return;
   if(!l.c){ el.innerHTML = ''; return; }
-  const s = lnStock(l.c), q = +l.q||0, u = esc(pUnit(l.c));
+  const s = lnStock(l.c), q = +l.q||0, u = esc(ING().unit(l.c));
   el.innerHTML = `Stock ${fmt(s)} ${u}${q?` → quedará <b>${fmt(s+q)} ${u}</b>`:''}`;
 }
 function lnPaint(){
   const box = $('#mlines'); if(!box) return;
   box.innerHTML = mv.lines.map((l,i)=>`<div class="card" style="padding:10px 10px 8px;margin-bottom:8px">
     <div style="display:flex;gap:8px;align-items:center"><b style="min-width:22px;color:var(--muted)">${i+1}</b>
-      <input id="lp${i}" autocomplete="off" placeholder="Buscar producto por nombre o código" value="${l.c?esc(pName(l.c)):''}" oninput="lnSearch(${i})" style="flex:1;min-width:0">
+      <input id="lp${i}" autocomplete="off" placeholder="Buscar producto por nombre o código" value="${l.c?esc(ING().name(l.c)):''}" oninput="lnSearch(${i})" style="flex:1;min-width:0">
       ${mv.lines.length>1?`<button type="button" aria-label="Quitar producto ${i+1}" onclick="lnDel(${i})" style="width:40px;height:40px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--bad);font-size:20px;flex:none">×</button>`:''}</div>
     <div id="ll${i}"></div>
     <div style="display:flex;gap:8px;align-items:center;margin-top:6px"><input id="lq${i}" type="number" inputmode="decimal" step="any" min="0" placeholder="Cantidad" value="${esc(l.q)}" oninput="lnQ(${i})" style="width:42%">
@@ -685,12 +696,12 @@ function lnPaint(){
 function lnSearch(i){
   const q = $('#lp'+i).value.trim().toLowerCase(); mv.lines[i].c = ''; lnInfo(i);
   const l = $('#ll'+i); if(!q){ l.innerHTML=''; return; }
-  const r = S.productos.filter(p=>p.d.toLowerCase().includes(q)||p.c.includes(q)).slice(0,6);
+  const r = ING().prods.filter(p=>p.d.toLowerCase().includes(q)||p.c.includes(q)).slice(0,6);
   l.innerHTML = r.length ? `<div class="picklist">${r.map(p=>`<button onclick="lnPick(${i},${jsa(p.c)})">${esc(p.d)}<br><small>${esc(p.c)} · ${esc(p.u)}</small></button>`).join('')}</div>` : '';
 }
 function lnPick(i,c){
   if(mv.lines.some((l,k)=>k!==i && l.c===c)) return toast('Ese producto ya está en esta guía: suma la cantidad en su línea');
-  mv.lines[i].c = c; $('#lp'+i).value = pName(c); $('#ll'+i).innerHTML = ''; lnInfo(i);
+  mv.lines[i].c = c; $('#lp'+i).value = ING().name(c); $('#ll'+i).innerHTML = ''; lnInfo(i);
   $('#mcount').textContent = '('+mv.lines.filter(l=>l.c).length+' de '+ING_MAX+')'; $('#lq'+i).focus();
 }
 function lnQ(i){ mv.lines[i].q = $('#lq'+i).value; lnInfo(i); }
@@ -714,23 +725,402 @@ function saveIngreso(){
   const now = Date.now(), g = mv.g || uid();
   if(mv.id){   // modificación del ingreso completo (solo administrador)
     if(!needAdmin()) return;
-    const old = mv.old.map(id=>S.entradas.find(x=>x.id===id)).filter(Boolean), o0 = old[0]||{};
-    mv.old.forEach(id=>{ D.master.del[id]=now; }); D.master.entradas = D.master.entradas.filter(m=>!mv.old.includes(m.id));
-    ls.forEach(l=>{ const r = {id:uid(), doc, f, c:l.c, q:+l.q, g, ts:o0.ts||now, u:o0.u||me(), eu:me(), ets:now}; if(o0.fotos) r.fotos = o0.fotos; D.master.entradas.push(r); });
+    const box = mv.mod==='i' ? D.master.ind : D.master, old = mv.old.map(id=>ING().ents.find(x=>x.id===id)).filter(Boolean), o0 = old[0]||{};
+    const key = mv.mod==='i' ? 'ent' : 'entradas';
+    mv.old.forEach(id=>{ D.master.del[id]=now; }); box[key] = box[key].filter(m=>!mv.old.includes(m.id));
+    ls.forEach(l=>{ const r = {id:uid(), doc, f, c:l.c, q:+l.q, g, ts:o0.ts||now, u:o0.u||me(), eu:me(), ets:now}; if(o0.fotos) r.fotos = o0.fotos; box[key].push(r); });
     save('master'); closeSheet(); render(); return toast('Ingreso modificado: '+ls.length+' producto(s)');
   }
-  const T = target(), fotos = mv.fotos||[];
+  const fotos = mv.fotos||[];
   const recs = ls.map(l=>{ const r = {id:uid(), doc, f, c:l.c, q:+l.q, g, ts:now, u:me()}; if(fotos.length) r.fotos = fotos.length; return r; });
-  T.entradas.push(...recs); save(tgtName());
+  if(mv.mod==='i'){ if(!iWrite()) return; D.master.ind = D.master.ind || emptyInd(); D.master.ind.ent.push(...recs); save('master'); }
+  else { const T = target(); T.entradas.push(...recs); save(tgtName()); }
   if(fotos.length){ mv.fotos = []; render(); fotoProcesar(recs, fotos).catch(e=>toast('No se pudieron preparar las fotos: '+e.message)); return; }
   closeSheet(); render(); toast(recs.length>1 ? 'Ingreso registrado: '+recs.length+' productos' : 'Entrada registrada');
 }
 function delIngreso(){
   if(!needAdmin()) return;
   if(!confirm('¿Eliminar todo este ingreso ('+mv.old.length+' producto(s))? El stock se recalculará.')) return;
-  const now = Date.now(); mv.old.forEach(id=>{ D.master.del[id]=now; }); D.master.entradas = D.master.entradas.filter(m=>!mv.old.includes(m.id));
+  const now = Date.now(); mv.old.forEach(id=>{ D.master.del[id]=now; });
+  if(mv.mod==='i') D.master.ind.ent = D.master.ind.ent.filter(m=>!mv.old.includes(m.id)); else D.master.entradas = D.master.entradas.filter(m=>!mv.old.includes(m.id));
   save('master'); closeSheet(); render(); toast('Ingreso eliminado');
 }
+/* =====================================================================================
+   MÓDULO DE MATERIAL INDIRECTO (repuestos, ferretería, suministros…) Y COMBUSTIBLES
+   - Ingresos por guía (hasta 100 productos, fotos de la guía, WhatsApp)
+   - Egresos de material indirecto (producto, cantidad, piscina, equipo de control)
+   - Despachos de combustible (diesel camaronero / premium / gasolina por equipo)
+   - Lecturas diarias: generadores de la subestación y motores de la estación de bombeo
+     (horómetro final + nivel del tanque en cm → galones con la tabla de aforo)
+   - Cierre del día: los dos archivos "hoja1" para subir al sistema y el formato diario en PDF
+   Los registros viven en D.master.ind (lo escribe el administrador). El catálogo de productos,
+   equipos y tablas de aforo vive en catalogo_indirectos.json (OneDrive), importado de los Excel.
+   ===================================================================================== */
+const ICAT_FILE = 'catalogo_indirectos.json', ICAT_KEY = 'inv_gambirasi_icat';
+const FUEL_DEF = [['00812','DIESEL CAMARONERO - TAU 8K.GLN - ESM 0K.GLN'],['00813','DIESEL PREMIUM - TAU 2.5K.GLN - ESM 0K.GLN'],['00814','GASOLINA ECO - TAU 0.93K.GLN - ESM 0K.GLN']];
+const FUEL_LAB = {'00812':'Diesel camaronero','00813':'Diesel premium','00814':'Gasolina'};
+const GEN_EQ = [['TAU-0048','Generador 1'],['TAU-0049','Generador 2'],['TAU-0050','Generador 3']];
+const BOM_EQ = [['TAU-0027','Motor C9 #1'],['TAU-0028','Motor C9 #2'],['TAU-0029','Motor C9 #3'],['TAU-0039','Motor Weichai #4'],['TAU-0031','Motor Weichai #5']];
+const EQ_AIRE = 'TAU-0035';
+// orden de la plantilla de combustible (equipos por producto)
+const FUEL_ORDEN = {'00812':['TAU-0027','TAU-0028','TAU-0029','TAU-0039','TAU-0031','TAU-0048','TAU-0049','TAU-0050','TAU-0035','TAU-0003'],
+  '00813':['TAU-0032','TAU-0001','TAU-0002','TAU-0034','TAU-0033','TAU-0041','TAU-0046','TAU-0010','TAU-0045','TAU-0038','TAU-0003','TAU-0043'],
+  '00814':['TAU-0011','TAU-0012','TAU-0013','TAU-0014','TAU-0015','TAU-0016','TAU-0017','TAU-0018','TAU-0019','TAU-0020','TAU-0021','TAU-0022','TAU-0023','TAU-0040','TAU-0044','TAU-0051','TAU-0052','TAU-0053','TAU-0054','TAU-0055','TAU-0003','TAU-0004','TAU-0005','TAU-0006','TAU-0030','TAU-0007','TAU-0008','TAU-0043','TAU-0042','TAU-0036']};
+const IFIRMA_DEF = {elab:{n:'CARLOS HIDALGO', c:'BODEGUERO INDIRECTOS'}, firmas:[{n:'DIEGO TORRES', c:'ADMINISTRADOR'}]};
+
+// ---------- datos
+function emptyInd(){ return {ent:[], sal:[], lec:[], cfg:{}}; }
+function sIRecs(a){ const raw = Array.isArray(a)?a:[], base = sRecs(raw), byid = new Map(raw.filter(x=>x&&x.id).map(x=>[x.id,x]));
+  return base.map(o=>{ const r = byid.get(o.id)||{}; const e = sStr(r.e,20); if(e) o.e = e; o.k = r.k==='c' ? 'c' : 'i'; const src = sStr(r.src,60); if(src) o.src = src; return o; }); }
+function sLec(a){ return (Array.isArray(a)?a:[]).filter(x=>x&&RX_ID.test(x.id)&&RX_DT.test(x.f)&&(x.t==='gen'||x.t==='bom')).map(x=>{
+  const o = {id:x.id, f:x.f, t:x.t, ts:sNum(x.ts), cm:sNum(x.cm), cm2:sNum(x.cm2), ing:sNum(x.ing), hor:sMap(x.hor, sNum), obs:sStr(x.obs,300)};
+  const u = sMail(x.u); if(u) o.u = u; const eu = sMail(x.eu); if(eu){ o.eu = eu; o.ets = sNum(x.ets); }
+  const nf = Math.round(sNum(x.fotos)); if(nf>0) o.fotos = Math.min(20,nf); return o; }); }
+function sIcfg(c){ c = (c&&typeof c==='object')?c:{}; const p = x => ({n:sStr(x&&x.n,60).toUpperCase(), c:sStr(x&&x.c,60).toUpperCase()});
+  return {ts:sNum(c.ts), elab: c.elab ? p(c.elab) : null, firmas:(Array.isArray(c.firmas)?c.firmas:[]).map(p).filter(x=>x.n).slice(0,20)}; }
+function sInd(s){ s = (s&&typeof s==='object')?s:{}; return {ent:sRecs(s.ent), sal:sIRecs(s.sal), lec:sLec(s.lec), cfg:sIcfg(s.cfg)}; }
+function mergeInd(L,R,del){ L = L||emptyInd(); R = R||emptyInd();
+  return {ent:byId(L.ent,R.ent,del), sal:byId(L.sal,R.sal,del), lec:byId(L.lec,R.lec,del), cfg:(L.cfg&&L.cfg.ts||0)>=(R.cfg&&R.cfg.ts||0)?L.cfg:R.cfg}; }
+const IND = () => { const i = D.master.ind || (D.master.ind = emptyInd()); const del = D.master.del||{};
+  return {ent:i.ent.filter(x=>!del[x.id]), sal:i.sal.filter(x=>!del[x.id]), lec:i.lec.filter(x=>!del[x.id]), cfg:i.cfg||{}}; };
+function icfg(){ const c = IND().cfg; return {elab: c.elab || IFIRMA_DEF.elab, firmas: (c.firmas&&c.firmas.length) ? c.firmas : IFIRMA_DEF.firmas}; }
+
+// ---------- catálogo (productos, equipos, aforo, valores iniciales)
+let ICAT = (()=>{ try{ return JSON.parse(localStorage.getItem(ICAT_KEY)||'null'); }catch(e){ return null; } })();
+const icatOk = () => !!(ICAT && Array.isArray(ICAT.prods) && ICAT.prods.length);
+let ICMAP = null;
+function icMaps(){ if(ICMAP && ICMAP.src===ICAT) return ICMAP; const p = new Map(), e = new Map();
+  ((ICAT&&ICAT.prods)||[]).forEach(([c,n,u])=>p.set(c,{c,n,u})); ((ICAT&&ICAT.fuel)||FUEL_DEF).forEach(([c,n])=>{ if(!p.has(c)) p.set(c,{c,n,u:'GALONES'}); });
+  ((ICAT&&ICAT.eqs)||[]).forEach(([c,n])=>e.set(c,n)); return ICMAP = {src:ICAT, p, e}; }
+const iName = c => (icMaps().p.get(c)||{}).n || c;
+const iUnit = c => (icMaps().p.get(c)||{}).u || 'UND';
+const eqName = c => icMaps().e.get(c) || c;
+const fuelName = c => (((ICAT&&ICAT.fuel)||FUEL_DEF).find(x=>x[0]===c)||[c,c])[1];
+async function icatSync(){
+  if(!navigator.onLine || !od().token) return;
+  try{ const m = await graph(ip(ICAT_FILE)+'?$select=id,eTag'); if(!m) return;
+    if(ICAT && ICAT.etag===m.eTag) return;
+    const j = await readJSON(itemUrl(m.id)+'/content'); if(!j || !Array.isArray(j.prods)) return;
+    j.etag = m.eTag; ICAT = j; ICMAP = null; try{ localStorage.setItem(ICAT_KEY, JSON.stringify(j)); }catch(e){}
+  }catch(e){}
+}
+// volumen del tanque principal de bombeo (cilindro horizontal con tapas cónicas, igual que la hoja AUXILIAR)
+function auxGal(h, k){ k = k || {D:160.5, Lc:369, Lk:32}; const R = k.D/2;
+  if(!(h>k.D/1000)) return 0; if(h>=k.D) return (Math.PI*R*R*k.Lc/1000 + 2/3*Math.PI*R*R*k.Lk/1000)*0.264172;
+  const seg = R*R*Math.acos((R-h)/R) - (R-h)*Math.sqrt(2*R*h-h*h); return (k.Lc*seg/1000 + 2*(k.Lk/(3*R))*seg/1000)*0.264172; }
+function aforoGal(tabla, cm){   // tabla de aforo cm → galones, con interpolación entre décimas
+  if(!tabla || !tabla.length || !(cm>0)) return 0; if(cm<=tabla[0][0]) return tabla[0][1]*cm/tabla[0][0];
+  for(let i=1;i<tabla.length;i++){ const [x1,y1] = tabla[i]; if(cm<=x1){ const [x0,y0] = tabla[i-1]; return y0 + (y1-y0)*(cm-x0)/((x1-x0)||1); } }
+  return tabla[tabla.length-1][1]; }
+function tanqueGal(t, cm, cm2){ const a = (ICAT&&ICAT.aforo)||{};
+  if(t==='gen') return Math.round(aforoGal(a.gen, cm));
+  return Math.round(auxGal(cm, ICAT&&ICAT.aux) + aforoGal(a.bom, cm2)); }
+// horómetro: acepta 2645.5 o 2645:30
+function parseHor(s){ s = String(s||'').trim().replace(',','.'); if(!s) return NaN; const m = s.match(/^(\d+):(\d{1,2})$/); return m ? +m[1] + (+m[2])/60 : +s; }
+const horTxt = (h, t) => t==='gen' ? (Math.floor(h)+':'+String(Math.round((h-Math.floor(h))*60)).padStart(2,'0')) : fmt(h);
+
+// ---------- importar catálogo desde los Excel (solo administrador)
+async function icatImport(inp){
+  if(!needAdmin()) return; const files = [...(inp.files||[])]; inp.value = ''; if(!files.length) return;
+  try{ await loadXLSX(); }catch(e){ return toast(e.message); }
+  const cat = Object.assign({prods:[], eqs:[], fuel:FUEL_DEF, aforo:{}, aux:null, ini:{}}, ICAT||{}); delete cat.etag; const got = [];
+  const cellv = (ws, a) => { const c = ws[a]; return c ? c.v : undefined; };
+  const rows = ws => { if(!ws || !ws['!ref']) return []; const rg = XLSX.utils.decode_range(ws['!ref']); rg.s.r = 0; rg.s.c = 0; return XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null, range:rg}); };
+  const code = v => { v = String(v==null?'':v).trim(); return /^\d{1,5}$/.test(v) ? v.padStart(5,'0') : v; };
+  const leerAforo = ws => { const R = rows(ws); let hr = -1, cs = [];
+    for(let r=0;r<Math.min(R.length,25)&&hr<0;r++){ const row = R[r]||[]; const c = row.map((x,i)=>/^CMTS/i.test(String(x||'').trim())?i:-1).filter(i=>i>=0); if(c.length){ hr = r; cs = c; } }
+    if(hr<0) return null; const gs = cs.map(c=>{ for(let d=c+1; d<c+5; d++) if(/^GAL/i.test(String((R[hr]||[])[d]||'').trim())) return d; return -1; });
+    const pts = new Map(); for(let r=hr+1;r<R.length;r++) cs.forEach((c,i)=>{ const a = (R[r]||[])[c], b = (R[r]||[])[gs[i]]; if(typeof a==='number' && typeof b==='number') pts.set(Math.round(a*100)/100, b); });
+    return [...pts.entries()].sort((x,y)=>x[0]-y[0]); };
+  const colN = L => L.split('').reduce((a,ch)=>a*26+ch.charCodeAt(0)-64,0)-1;
+  const ultima = (ws, cols, horas) => { const R = rows(ws);   // última fila con medida final del tanque y horómetros
+    let best = null;
+    for(let r=5; r<R.length; r++){ const row = R[r]||[], f = row[colN('B')], tk = row[colN('F')];
+      if(typeof tk==='number' && tk>0 && typeof f==='number' && f>40000 && f<80000 && (!best || f>=best.n)){ const hor = {}; cols.forEach(([eq,L])=>{ const v = row[colN(L)]; if(typeof v==='number' && v>0) hor[eq] = Math.round(v*(horas?24:1)*100)/100; });
+        if(Object.keys(hor).length) best = {n:f, f: xIso(f), tank: tk, hor}; } }
+    if(best) delete best.n; return best; };
+  for(const file of files){
+    let wb; try{ wb = XLSX.read(await file.arrayBuffer(), {type:'array'}); }catch(e){ toast(file.name+': no se pudo leer'); continue; }
+    const S2 = wb.Sheets;
+    if(S2['PRODUCTOS'] && S2['EQUIPOS DE CONTROL']){
+      const P = rows(S2['PRODUCTOS']), prods = [], seen = new Set();
+      for(let r=4;r<P.length;r++){ const row = P[r]||[], c = code(row[0]), n = String(row[1]||'').trim(); if(!c || !n || seen.has(c)) continue; seen.add(c); prods.push([c, n, String(row[3]||'UNIDAD').trim()]); }
+      const E = rows(S2['EQUIPOS DE CONTROL']), eqs = [];
+      for(let r=4;r<E.length;r++){ const row = E[r]||[], c = String(row[0]||'').trim(), n = String(row[1]||'').trim(); if(/^TAU-\d+$/i.test(c) && n) eqs.push([c.toUpperCase(), n]); }
+      if(prods.length){ cat.prods = prods; got.push(prods.length+' productos'); } if(eqs.length){ cat.eqs = eqs; got.push(eqs.length+' equipos'); }
+    }
+    if(S2['TODOCOMPU']){ const sh = S2['hoja1'] || S2['CONSUMO']; const fuel = new Map();
+      rows(sh).forEach(row=>{ const c = code(row&&row[0]); if(/^0081[234]$/.test(c) && row[1]) fuel.set(c, String(row[1]).trim()); });
+      if(fuel.size){ cat.fuel = [...fuel.entries()].sort(); got.push('combustibles'); } }
+    if(S2['GENERADOR 1'] && S2['MEDIDA DE TANQUE']){
+      const af = leerAforo(S2['MEDIDA DE TANQUE']); if(af && af.length){ cat.aforo = Object.assign({}, cat.aforo, {gen:af}); got.push('aforo generadores ('+af.length+' medidas)'); }
+      const u = ultima(S2['CONSUMO DIARIO'], [['TAU-0048','I'],['TAU-0049','O'],['TAU-0050','U']], true); if(u){ cat.ini = Object.assign({}, cat.ini, {gen:u}); got.push('últimos horómetros de generadores ('+fdate(u.f)+')'); }
+    }
+    if(S2['AUXILIAR'] && S2['MEDIDA DE TANQUE']){
+      const af = leerAforo(S2['MEDIDA DE TANQUE']); if(af && af.length){ cat.aforo = Object.assign({}, cat.aforo, {bom:af}); got.push('aforo bombeo ('+af.length+' medidas)'); }
+      const A = S2['AUXILIAR'], D5 = cellv(A,'D5'), D6 = cellv(A,'D6'), D7 = cellv(A,'D7'); if(D5>0 && D6>0) cat.aux = {D:D5, Lc:D6, Lk:D7||0};
+      const u = ultima(S2['CONSUMO DIARIO'], [['TAU-0027','J'],['TAU-0028','O'],['TAU-0029','T'],['TAU-0039','Y'],['TAU-0031','AD']], false); if(u){ cat.ini = Object.assign({}, cat.ini, {bom:u}); got.push('últimos horómetros de bombeo ('+fdate(u.f)+')'); }
+    }
+  }
+  if(!got.length) return toast('No se reconoció ningún archivo de indirectos');
+  cat.ts = Date.now();
+  try{ const r = await graph(ip(ICAT_FILE)+':/content', {method:'PUT', headers:J, body:JSON.stringify(cat)}); cat.etag = r && r.eTag; }catch(e){ toast('Guardado en este equipo; no se pudo subir a OneDrive: '+e.message); }
+  ICAT = cat; ICMAP = null; try{ localStorage.setItem(ICAT_KEY, JSON.stringify(cat)); }catch(e){}
+  render(); openSheet(`<h2>Catálogo de indirectos actualizado</h2><div class="info">${got.map(esc).join('<br>')}</div><div class="actions"><button class="btn primary" onclick="closeSheet()">Listo</button></div>`);
+}
+
+// ---------- stock de material indirecto y combustible
+function iStock(c){ const I = IND(); let s = 0; I.ent.forEach(x=>{ if(x.c===c) s+=x.q; }); I.sal.forEach(x=>{ if(x.c===c && x.k!=='c') s-=x.q; }); return Math.round(s*1000)/1000; }
+function lecUlt(t, antesDe){   // última lectura (o valor inicial importado) antes de una fecha
+  const L = IND().lec.filter(x=>x.t===t && (!antesDe || x.f<antesDe)).sort((a,b)=>b.f.localeCompare(a.f)||b.ts-a.ts)[0];
+  if(L) return {f:L.f, tank:tanqueGal(t, L.cm, L.cm2), hor:L.hor};
+  const ini = ICAT && ICAT.ini && ICAT.ini[t]; return ini && (!antesDe || ini.f<antesDe) ? ini : null; }
+function airGal(f){ return IND().sal.filter(x=>x.k==='c' && x.f===f && x.e===EQ_AIRE && x.c==='00812').reduce((a,x)=>a+x.q,0); }
+function lecCalc(L){   // horas por motor, consumo del tanque y galones repartidos por horas trabajadas
+  const prev = lecUlt(L.t, L.f) || {tank:0, hor:{}}, eqs = L.t==='gen' ? GEN_EQ : BOM_EQ, fin = tanqueGal(L.t, L.cm, L.cm2);
+  const air = L.t==='bom' ? airGal(L.f) : 0, consumo = Math.round(((prev.tank||0) + (L.ing||0) - fin - air)*100)/100;
+  const rows = eqs.map(([c,n])=>{ const ini = (prev.hor||{})[c], f = L.hor[c]; const h = (f>0 && ini>0 && f>=ini) ? f-ini : 0; return {c, n, ini, fin:f, h}; });
+  const tot = rows.reduce((a,r)=>a+r.h,0);
+  rows.forEach(r=>{ r.gal = tot>0 ? Math.round(r.h*consumo/tot*100)/100 : 0; r.gph = r.h>0 ? r.gal/r.h : 0; });
+  return {prev, fin, air, consumo, rows, tot}; }
+
+// ---------- vista de inicio del módulo indirecto
+function openIMenu(){ openSheet(`<h2>Material indirecto</h2><div class="stack" style="display:grid;gap:8px;margin-top:8px">
+  <button class="btn in" onclick="openIngreso('', null, 'i')">${IC.down} Ingreso (guía)</button><button class="btn out" onclick="openIEgreso()">${IC.up} Egreso</button>
+  <button class="btn ghost" onclick="openFuel()">Despacho de combustible</button><button class="btn ghost" onclick="openLec('gen')">Lectura de generadores</button>
+  <button class="btn ghost" onclick="openLec('bom')">Lectura de estación de bombeo</button><button class="btn ghost" onclick="openCierre()">Cierre del día</button></div>`); }
+function vInd(){
+  const I = IND(), hoy = todayISO(), entH = I.ent.filter(x=>x.f===hoy), salH = I.sal.filter(x=>x.f===hoy && x.k!=='c'), comb = I.sal.filter(x=>x.f===hoy && x.k==='c');
+  const lg = I.lec.find(x=>x.t==='gen' && x.f===hoy), lb = I.lec.find(x=>x.t==='bom' && x.f===hoy);
+  const ug = lecUlt('gen'), ub = lecUlt('bom');
+  const last = [...I.ent.map(x=>({...x,tt:'ie'})), ...I.sal.map(x=>({...x,tt:x.k==='c'?'ic':'is'})), ...I.lec.map(x=>({...x,tt:'il'}))].sort((a,b)=>b.f.localeCompare(a.f)||(b.ts-a.ts)).slice(0,10);
+  return `${!icatOk()?`<div class="card" style="padding:14px;margin:0 0 12px"><b>Falta el catálogo de material indirecto</b><p style="font-size:14px;color:var(--muted);margin:6px 0 10px">${isAdmin()?'Sube tus archivos de Excel de indirectos (consumo diario de indirectos, plantilla de combustible, generadores y bombeo) para cargar productos, equipos y tablas de aforo.':'El administrador debe cargar el catálogo de indirectos.'}</p>${isAdmin()?`<button class="btn primary full" onclick="$('#icatf').click()">Subir archivos de indirectos</button>`:''}</div>`:''}
+  <div class="grid2">
+    <div class="card kpi"><b>${entH.length}</b><span>Ingresos hoy</span></div>
+    <div class="card kpi"><b>${salH.length}</b><span>Egresos hoy</span></div>
+    <div class="card kpi"><b>${fmt(comb.reduce((a,x)=>a+x.q,0))}</b><span>Galones despachados hoy</span></div>
+    <div class="card kpi ${lg&&lb?'':'warn'}"><b>${(lg?1:0)+(lb?1:0)}/2</b><span>Lecturas de hoy</span></div>
+  </div>
+  <div class="actions"><button class="btn in" onclick="openIngreso('', null, 'i')">${IC.down} Ingreso</button><button class="btn out" onclick="openIEgreso()">${IC.up} Egreso</button></div>
+  <div class="grid2" style="margin-top:10px">
+    <button class="btn ghost" onclick="openFuel()">Combustible</button>
+    <button class="btn ghost" onclick="openLec('gen')">Generadores ${lg?'✓':''}</button>
+    <button class="btn ghost" onclick="openLec('bom')">Estación de bombeo ${lb?'✓':''}</button>
+    <button class="btn ghost" onclick="openCierre()">Cierre del día</button>
+  </div>
+  <div class="sec"><h2>Tanques de diesel</h2></div>
+  <div class="grid2">
+    <div class="card kpi"><b>${ug?fmt(ug.tank):'—'}</b><span>Subestación (gal)${ug?' · '+esc(fdate(ug.f)):''}</span></div>
+    <div class="card kpi"><b>${ub?fmt(ub.tank):'—'}</b><span>Bombeo (gal)${ub?' · '+esc(fdate(ub.f)):''}</span></div>
+  </div>
+  <div class="sec"><h2>Últimos movimientos indirectos</h2></div>
+  <div class="card list">${last.length ? last.map(iMovItem).join('') : '<div class="empty">Todavía no hay movimientos de material indirecto.</div>'}</div>`;
+}
+function iMovItem(x){
+  const t = x.tt, lab = {ie:'Ingreso', is:'Egreso', ic:'Combustible', il:x.t==='gen'?'Generadores':'Bombeo'}[t];
+  const name = t==='il' ? (x.t==='gen'?'Lectura de generadores':'Lectura de estación de bombeo') : t==='ic' ? FUEL_LAB[x.c]+' · '+eqName(x.e) : iName(x.c);
+  const qty = t==='il' ? 'Tanque '+fmt(tanqueGal(x.t, x.cm, x.cm2))+' gal' : (t==='ie'?'+':'−')+fmt(x.q)+' '+(t==='ic'?'GAL':iUnit(x.c));
+  return `<button class="item" onclick="openIDetail(${jsa(t)},${jsa(x.id)})"><div class="main"><div class="name">${esc(name)}</div><div class="sub">${esc(lab)} · ${esc(fdate(x.f))}${x.doc?' · '+esc(t==='ie'?'Doc '+x.doc:docLab(x.doc)):''}${x.e&&t==='is'?' · '+esc(x.e):''}${x.g&&t==='ie'?' · guía':''}</div></div><div class="qty"><b class="${t==='ie'?'in-t':'out-t'}">${esc(qty)}</b></div></button>`;
+}
+function openIDetail(t, id){
+  const I = IND(), m = (t==='ie'?I.ent:t==='il'?I.lec:I.sal).find(x=>x.id===id); if(!m) return;
+  if(t==='il') return openLec(m.t, m.id);
+  const grupo = t==='ie' && m.g ? I.ent.filter(x=>x.g===m.g) : [m];
+  openSheet(`<h2>${t==='ie'?'Ingreso de material indirecto':t==='ic'?'Despacho de combustible':'Egreso de material indirecto'}</h2>
+    <div class="card" style="padding:14px;margin:8px 0">${grupo.map(x=>`<div style="display:flex;justify-content:space-between;gap:8px;padding:4px 0"><span>${esc(t==='ic'?fuelName(x.c):iName(x.c))}<br><small style="color:var(--muted)">${esc(x.c)}${x.e?' · '+esc(x.e)+' '+esc(eqName(x.e)):''}${x.doc&&t!=='ie'?' · '+esc(docLab(x.doc)):''}</small></span><b>${t==='ie'?'+':'−'}${fmt(x.q)} ${esc(t==='ic'?'GAL':iUnit(x.c))}</b></div>`).join('')}
+      <div style="font-size:13px;color:var(--muted);margin-top:8px">${esc(fdate(m.f))}${t==='ie'&&m.doc?' · Guía '+esc(m.doc):''} · Registrado por ${esc(userName(m.u))} · ${esc(fdt(m.ts))}${m.eu?'<br>Modificado por '+esc(userName(m.eu))+' · '+esc(fdt(m.ets)):''}</div></div>
+    ${t==='ie'&&m.fotos?`<button class="btn ghost full" style="margin-bottom:10px" onclick="iFotoVer(${jsa(id)})">Ver y compartir fotos (${m.fotos})</button>`:''}
+    ${isAdmin()?`<div class="actions">${t==='ie'?`<button class="btn ghost" onclick="openIngreso('', ${jsa(id)}, 'i')">Modificar ingreso</button>`:''}<button class="btn danger" onclick="iDel(${jsa(t)},${jsa(id)})">Eliminar</button></div>`:''}`);
+}
+function iDel(t, id){
+  if(!needAdmin()) return; const I = D.master.ind; if(!confirm('¿Eliminar este registro?')) return;
+  const ids = t==='ie' ? (()=>{ const m = I.ent.find(x=>x.id===id); return m && m.g ? I.ent.filter(x=>x.g===m.g).map(x=>x.id) : [id]; })() : [id];
+  const now = Date.now(); ids.forEach(i=>{ D.master.del[i] = now; }); I.ent = I.ent.filter(x=>!ids.includes(x.id)); I.sal = I.sal.filter(x=>!ids.includes(x.id)); I.lec = I.lec.filter(x=>!ids.includes(x.id));
+  save('master'); closeSheet(); render(); toast('Registro eliminado'); }
+function iWrite(){ if(!isAdmin()){ toast('Por ahora solo el administrador registra material indirecto'); return false; } if(!icatOk()){ toast('Primero carga el catálogo de indirectos (Ajustes)'); return false; } return true; }
+
+// ---------- selector reutilizable de piscina y de equipo de control
+function piscOpts(sel, req){ return `<option value="">${req?'Elige…':'Sin piscina'}</option>`+[...PSC,...PRE].map(d=>`<option value="${d}"${d===sel?' selected':''}>${esc(docLab(d))}</option>`).join(''); }
+function eqPick(id, val, onpick){
+  return `<input id="${id}" autocomplete="off" placeholder="Buscar equipo por código o nombre" value="${val?esc(val+' · '+eqName(val)):''}" data-v="${esc(val||'')}" oninput="eqSearch('${id}','${onpick||''}')"><div id="${id}L"></div>`; }
+function eqSearch(id, onpick){
+  const inp = $('#'+id), q = inp.value.trim().toLowerCase(); inp.dataset.v = ''; const l = $('#'+id+'L'); if(!q){ l.innerHTML=''; return; }
+  const r = ((ICAT&&ICAT.eqs)||[]).filter(([c,n])=>c.toLowerCase().includes(q)||n.toLowerCase().includes(q)).slice(0,8);
+  l.innerHTML = r.length ? `<div class="picklist">${r.map(([c,n])=>`<button type="button" onclick="eqSet('${id}',${jsa(c)},'${onpick||''}')">${esc(n)}<br><small>${esc(c)}</small></button>`).join('')}</div>` : ''; }
+function eqSet(id, c, onpick){ const inp = $('#'+id); inp.value = c+' · '+eqName(c); inp.dataset.v = c; $('#'+id+'L').innerHTML = ''; if(onpick && window[onpick]) window[onpick](c); }
+
+// ---------- egreso de material indirecto
+let ieg = {c:'', f:todayISO(), e:'', d:''};
+function openIEgreso(){
+  if(!iWrite()) return; ieg.c = '';
+  openSheet(`<h2>Egreso de material indirecto</h2>
+    <div class="field"><label>Producto</label><input id="ip" autocomplete="off" placeholder="Buscar por nombre o código" oninput="ipSearch()"><div id="ipl"></div></div>
+    <div id="ipinfo"></div>
+    <div class="row"><div class="field"><label>Cantidad</label><input id="iq" type="number" inputmode="decimal" step="any" min="0"></div>
+      <div class="field"><label>Fecha</label><input id="if" type="date" value="${esc(ieg.f)}"></div></div>
+    <div class="field"><label>Equipo de control</label>${eqPick('ie', ieg.e)}</div>
+    <div class="field"><label>Piscina o precría (opcional)</label><select id="id">${piscOpts(ieg.d)}</select></div>
+    <button class="btn primary full" onclick="saveIEgreso(false)">Guardar</button>
+    <button class="btn ghost full" style="margin-top:8px" onclick="saveIEgreso(true)">Guardar y registrar otro</button>`);
+  setTimeout(()=>{ const i=$('#ip'); if(i) i.focus(); }, 50);
+}
+function ipSearch(){
+  const q = $('#ip').value.trim().toLowerCase(); ieg.c = ''; $('#ipinfo').innerHTML = ''; const l = $('#ipl'); if(q.length<2){ l.innerHTML=''; return; }
+  const r = ICAT.prods.filter(([c,n])=>c.includes(q)||n.toLowerCase().includes(q)).slice(0,8);
+  l.innerHTML = r.length ? `<div class="picklist">${r.map(([c,n,u])=>`<button type="button" onclick="ipPick(${jsa(c)})">${esc(n)}<br><small>${esc(c)} · ${esc(u)}</small></button>`).join('')}</div>` : '<div class="info">No se encontró. Revisa el catálogo de indirectos.</div>'; }
+function ipPick(c){ ieg.c = c; $('#ip').value = iName(c); $('#ipl').innerHTML = ''; $('#ipinfo').innerHTML = `<div class="info">Stock según la app: <b>${fmt(iStock(c))} ${esc(iUnit(c))}</b></div>`; $('#iq').focus(); }
+function saveIEgreso(otro){
+  const q = +$('#iq').value, f = $('#if').value, e = $('#ie').dataset.v, d = $('#id').value;
+  if(!ieg.c) return toast('Elige el producto de la lista'); if(!(q>0)) return toast('Escribe una cantidad mayor a 0'); if(!f) return toast('Elige la fecha'); if(!e) return toast('Elige el equipo de control');
+  const s = iStock(ieg.c); if(q > s && !confirm('El stock según la app es '+fmt(s)+' '+iUnit(ieg.c)+'. ¿Registrar igual?')) return;
+  D.master.ind = D.master.ind || emptyInd(); D.master.ind.sal.push({id:uid(), f, c:ieg.c, q, doc:d, e, k:'i', ts:Date.now(), u:me()});
+  ieg.f = f; ieg.e = e; ieg.d = d; save('master'); render(); toast('Egreso registrado');
+  if(otro) openIEgreso(); else closeSheet(); }
+
+// ---------- despacho de combustible
+let ifu = {c:'00812', f:todayISO(), e:'', d:''};
+function openFuel(){
+  if(!iWrite()) return; const hoy = IND().sal.filter(x=>x.k==='c' && x.f===ifu.f).sort((a,b)=>b.ts-a.ts);
+  openSheet(`<h2>Despacho de combustible</h2>
+    <div class="seg" style="margin:10px 0;grid-template-columns:1fr 1fr 1fr">${FUEL_DEF.map(([c])=>`<button class="${ifu.c===c?'on':''}" onclick="ifu.c='${c}';openFuel()">${FUEL_LAB[c]}</button>`).join('')}</div>
+    <div class="row"><div class="field"><label>Galones</label><input id="fq" type="number" inputmode="decimal" step="any" min="0"></div>
+      <div class="field"><label>Fecha</label><input id="ff" type="date" value="${esc(ifu.f)}" onchange="ifu.f=this.value"></div></div>
+    <div class="field"><label>Equipo de control</label>${eqPick('fe', ifu.e)}</div>
+    <div class="field"><label>Piscina o precría (aireadores, motor fuera de borda…)</label><select id="fd">${piscOpts(ifu.d)}</select></div>
+    <button class="btn primary full" onclick="saveFuel()">Guardar despacho</button>
+    <div class="sec"><h2>Despachos del ${esc(fdate(ifu.f))}</h2></div>
+    <div class="card list">${hoy.length?hoy.map(x=>`<button class="item" onclick="openIDetail('ic',${jsa(x.id)})"><div class="main"><div class="name">${esc(FUEL_LAB[x.c])} · ${esc(eqName(x.e))}</div><div class="sub">${esc(x.e)}${x.doc?' · '+esc(docLab(x.doc)):''}</div></div><div class="qty"><b class="out-t">${fmt(x.q)} gal</b></div></button>`).join(''):'<div class="empty">Sin despachos este día.</div>'}</div>
+    <p style="font-size:13px;color:var(--muted)">Los generadores de la subestación y los motores de la estación de bombeo no se despachan aquí: su consumo sale solo de las lecturas de horómetro y tanque.</p>`);
+}
+function saveFuel(){
+  const q = +$('#fq').value, f = $('#ff').value, e = $('#fe').dataset.v, d = $('#fd').value;
+  if(!(q>0)) return toast('Escribe los galones'); if(!f) return toast('Elige la fecha'); if(!e) return toast('Elige el equipo de control');
+  if((e===EQ_AIRE || e==='TAU-0036') && !d) return toast('Para aireadores y motor fuera de borda elige la piscina');
+  if([...GEN_EQ,...BOM_EQ].some(x=>x[0]===e) && !confirm('Ese equipo se calcula con la lectura de horómetro y tanque. ¿Registrar este despacho de todas formas?')) return;
+  D.master.ind = D.master.ind || emptyInd(); D.master.ind.sal.push({id:uid(), f, c:ifu.c, q, doc:d, e, k:'c', ts:Date.now(), u:me()});
+  ifu.f = f; ifu.e = e; ifu.d = d; save('master'); render(); toast('Despacho registrado'); openFuel(); }
+
+// ---------- lecturas de generadores y de la estación de bombeo
+let ilec = null;
+function openLec(t, id){
+  if(!iWrite()) return; const ex = id ? IND().lec.find(x=>x.id===id) : null;
+  if(mv && mv.fotos) mv.fotos.forEach(f=>URL.revokeObjectURL(f.url));
+  ilec = ex ? JSON.parse(JSON.stringify(ex)) : {id:null, t, f:todayISO(), cm:'', cm2:'', ing:'', hor:{}, obs:''};
+  if(!ex){ const hoyL = IND().lec.find(x=>x.t===t && x.f===ilec.f); if(hoyL){ ilec = JSON.parse(JSON.stringify(hoyL)); } }
+  mv = {t:'e', fotos:[], id:null};   // las fotos usan el mismo selector de cámara/galería
+  const eqs = t==='gen' ? GEN_EQ : BOM_EQ, prev = lecUlt(t, ilec.f);
+  openSheet(`<h2>${t==='gen'?'Generadores de la subestación':'Estación de bombeo'}</h2>
+    <p style="font-size:14px;color:var(--muted);margin:4px 0 10px">Escribe el horómetro final de cada ${t==='gen'?'generador':'motor'} y la medida del tanque en centímetros. La app busca los galones en la tabla de aforo y reparte el consumo según las horas trabajadas.</p>
+    <div class="row"><div class="field"><label>Fecha</label><input id="lf" type="date" value="${esc(ilec.f)}" onchange="ilec.f=this.value;lecPrev()"></div>
+      <div class="field"><label>Ingreso de diesel (gal)</label><input id="ling" type="number" inputmode="decimal" step="any" min="0" value="${esc(ilec.ing||'')}" oninput="lecPrev()"></div></div>
+    ${eqs.map(([c,n])=>`<div class="card" style="padding:10px;margin-bottom:8px"><b style="font-size:14px">${esc(n)}</b><small style="color:var(--muted)"> · ${esc(c)}</small>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px"><input id="lh_${c}" inputmode="decimal" placeholder="Horómetro final${t==='gen'?' (ej. 2645:30)':''}" value="${ilec.hor[c]?esc(horTxt(ilec.hor[c],t)):''}" oninput="lecPrev()" style="width:52%"><small id="lhi_${c}" style="color:var(--muted);flex:1"></small></div></div>`).join('')}
+    <div class="row"><div class="field"><label>${t==='gen'?'Medida del tanque (cm)':'Tanque principal (cm)'}</label><input id="lcm" type="number" inputmode="decimal" step="0.1" min="0" value="${esc(ilec.cm||'')}" oninput="lecPrev()"></div>
+      ${t==='bom'?`<div class="field"><label>Tanque auxiliar (cm)</label><input id="lcm2" type="number" inputmode="decimal" step="0.1" min="0" value="${esc(ilec.cm2||'')}" oninput="lecPrev()"></div>`:'<div></div>'}</div>
+    <div id="lprev"></div>
+    <div class="field"><label>Observación (opcional)</label><input id="lobs" maxlength="300" value="${esc(ilec.obs||'')}"></div>
+    ${ilec.id?'':`<div id="mfbox">${fotoField().replace('Fotos (opcional)','Fotos de horómetros y del tanque (opcional)')}</div>`}
+    <button class="btn primary full" onclick="saveLec()">${ilec.id?'Guardar cambios':'Guardar lectura'}</button>
+    ${ilec.id&&ilec.fotos?`<button class="btn ghost full" style="margin-top:8px" onclick="iFotoVer(${jsa(ilec.id)},'lec')">Ver y compartir fotos (${ilec.fotos})</button>`:''}
+    ${ilec.id&&isAdmin()?`<button class="btn danger full" style="margin-top:8px" onclick="iDel('il',${jsa(ilec.id)})">Eliminar lectura</button>`:''}
+    ${prev?'':`<div class="info bad" style="margin-top:10px">No hay lectura anterior ni valores iniciales: carga los archivos de ${t==='gen'?'generadores':'bombeo'} en Ajustes → Material indirecto.</div>`}`);
+  lecPrev();
+}
+function lecRead(){ const t = ilec.t, eqs = t==='gen'?GEN_EQ:BOM_EQ, hor = {}; eqs.forEach(([c])=>{ const v = parseHor($('#lh_'+c).value); if(v>0) hor[c] = Math.round(v*1000)/1000; });
+  return {id:ilec.id, t, f:$('#lf').value, cm:+$('#lcm').value||0, cm2:t==='bom'?(+$('#lcm2').value||0):0, ing:+$('#ling').value||0, hor, obs:$('#lobs').value.trim()}; }
+function lecPrev(){
+  if(!ilec || !$('#lprev')) return; const L = lecRead(), K = lecCalc(L), t = L.t;
+  K.rows.forEach(r=>{ const el = $('#lhi_'+r.c); if(el) el.innerHTML = r.ini>0 ? `Inicial ${esc(horTxt(r.ini,t))}${r.fin>0?(r.fin<r.ini?' · <b style="color:var(--bad)">menor al inicial</b>':` · <b>${esc(horTxt(r.h,t))} h</b> · ${fmt(r.gal)} gal`):''}` : 'Sin horómetro inicial'; });
+  $('#lprev').innerHTML = `<div class="info" style="margin:0 0 10px">Tanque inicial <b>${fmt(K.prev.tank||0)} gal</b>${L.ing?' + ingreso '+fmt(L.ing):''}${t==='bom'&&K.air?' − aireadores '+fmt(K.air):''} − final <b>${fmt(K.fin)} gal</b> = consumo <b>${fmt(K.consumo)} gal</b><br>Horas totales: <b>${esc(horTxt(K.tot,t))}</b>${K.tot>0?' · '+fmt(K.consumo/K.tot)+' gal por hora':''}${K.consumo<0?'<br><b style="color:var(--bad)">El consumo sale negativo: revisa la medida del tanque o el ingreso.</b>':''}</div>`;
+}
+function saveLec(){
+  const L = lecRead(); if(!L.f) return toast('Elige la fecha'); if(!(L.cm>0)) return toast('Escribe la medida del tanque en cm');
+  if(L.t==='bom' && !(L.cm2>0)) return toast('Escribe la medida del tanque auxiliar en cm');
+  if(!Object.keys(L.hor).length) return toast('Escribe al menos un horómetro final');
+  const K = lecCalc(L); if(K.rows.some(r=>r.fin>0 && r.ini>0 && r.fin<r.ini) && !confirm('Hay un horómetro final menor al inicial. ¿Guardar igual?')) return;
+  const dup = IND().lec.find(x=>x.t===L.t && x.f===L.f && x.id!==L.id); if(dup) return toast('Ya existe la lectura de ese día: ábrela desde Últimos movimientos para corregirla');
+  const now = Date.now(), I = D.master.ind = D.master.ind || emptyInd(), fotos = mv.fotos||[];
+  if(L.id){ if(!needAdmin()) return; const o = I.lec.find(x=>x.id===L.id); Object.assign(o, L, {eu:me(), ets:now}); save('master'); closeSheet(); render(); return toast('Lectura actualizada'); }
+  const rec = Object.assign(L, {id:uid(), ts:now, u:me()}); if(fotos.length) rec.fotos = fotos.length; I.lec.push(rec); save('master'); render();
+  if(fotos.length){ mv.fotos = []; fotoProcesar([rec], fotos, lecFotoInfo(rec)).catch(e=>toast('No se pudieron preparar las fotos: '+e.message)); return; }
+  closeSheet(); toast('Lectura guardada: consumo '+fmt(K.consumo)+' gal'); }
+function lecFotoInfo(L){ const K = lecCalc(L), t = L.t;
+  return {title:(t==='gen'?'GENERADORES SUBESTACIÓN':'ESTACIÓN DE BOMBEO')+' · GAMBIRASI', sub:'Tanque: '+fmt(L.cm)+' cm'+(t==='bom'?' / aux. '+fmt(L.cm2)+' cm':'')+' = '+fmt(K.fin)+' gal · consumo '+fmt(K.consumo)+' gal',
+    items:K.rows.filter(r=>r.fin>0).map(r=>({prod:r.n+' · horómetro '+horTxt(r.fin,t), cant:horTxt(r.h,t)+' h'})), doc:'', fecha:fdate(L.f), quien:userName(L.u), hora:new Date(L.ts).toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})}; }
+async function iFotoVer(id, kind){
+  const I = IND(), m = kind==='lec' ? I.lec.find(x=>x.id===id) : I.ent.find(x=>x.id===id); if(!m || !m.fotos) return;
+  openSheet(`<h2>Fotos</h2><div class="info">Cargando fotos…</div>`); const files = [];
+  for(const n of fotoNames(m)){ let blob = null; try{ const q = await fqGet(n); if(q) blob = q.blob; }catch(e){}
+    if(!blob && navigator.onLine && od().token){ try{ const r = await graph(ip(FOTO_DIR+'/'+n)+':/content', {raw:true}); if(r) blob = await r.blob(); }catch(e){} }
+    if(blob) files.push(new File([blob], n, {type:'image/jpeg'})); }
+  if(!files.length) return openSheet(`<h2>Fotos</h2><div class="info bad">No se encontraron las fotos (se guardan ${FOTO_DIAS} días).</div>`);
+  const info = kind==='lec' ? lecFotoInfo(m) : fotoInfo(m.g ? I.ent.filter(x=>x.g===m.g) : [m], 'i');
+  fotoShare.urls.forEach(u=>URL.revokeObjectURL(u)); fotoShare = {files, text:fotoTexto(info), urls:files.map(f=>URL.createObjectURL(f))};
+  fotoShow('Fotos', files.length+' de '+m.fotos+' foto(s)'); }
+
+// ---------- cierre del día: archivos para subir y formato diario
+let icie = {f:todayISO(), aut:0};
+function lineasInd(f){ return IND().sal.filter(x=>x.k!=='c' && x.f===f).sort((a,b)=>a.ts-b.ts).map(x=>({c:x.c, n:iName(x.c), q:x.q, p:x.doc, e:x.e||'', l:eqName(x.e||'')})); }
+function lineasFuel(f){
+  const out = [], I = IND();
+  ['gen','bom'].forEach(t=>{ const L = I.lec.find(x=>x.t===t && x.f===f); if(!L) return; lecCalc(L).rows.forEach(r=>{ if(r.gal>0) out.push({c:'00812', q:r.gal, p:'', e:r.c, src:t}); }); });
+  I.sal.filter(x=>x.k==='c' && x.f===f).forEach(x=>out.push({c:x.c, q:x.q, p:x.doc||'', e:x.e||''}));
+  const ordP = ['00812','00813','00814'], pord = d => { const i = [...PSC,...PRE].indexOf(d); return i<0?-1:i; };
+  const ordE = (c,e) => { const i = (FUEL_ORDEN[c]||[]).indexOf(e); return i<0 ? 999 : i; };
+  out.sort((a,b)=>ordP.indexOf(a.c)-ordP.indexOf(b.c) || ordE(a.c,a.e)-ordE(b.c,b.e) || pord(a.p)-pord(b.p));
+  return out.map(x=>Object.assign(x, {n:fuelName(x.c), l:eqName(x.e), q:Math.round(x.q*100)/100}));
+}
+const piscOut = d => d==='09B' ? '9B' : (d||'');
+function openCierre(){
+  if(!icatOk()) return toast('Primero carga el catálogo de indirectos (Ajustes)');
+  const f = icie.f, li = lineasInd(f), lf = lineasFuel(f), I = IND(), cfg = icfg();
+  const lg = I.lec.find(x=>x.t==='gen'&&x.f===f), lb = I.lec.find(x=>x.t==='bom'&&x.f===f);
+  openSheet(`<h2>Cierre del día</h2>
+    <div class="field"><label>Fecha</label><input type="date" value="${esc(f)}" onchange="icie.f=this.value;openCierre()"></div>
+    <div class="info" style="margin:0 0 10px">Material indirecto: <b>${li.length}</b> línea(s) · Combustible: <b>${lf.length}</b> línea(s), ${fmt(lf.reduce((a,x)=>a+x.q,0))} gal
+      ${!lg||!lb?`<br><b style="color:var(--warn)">Falta la lectura de ${[!lg?'generadores':'',!lb?'estación de bombeo':''].filter(Boolean).join(' y ')}.</b>`:''}</div>
+    <div class="field"><label>Elaborado por</label><div class="row"><input id="cen" value="${esc(cfg.elab.n)}" ${isAdmin()?'':'disabled'}><input id="cec" value="${esc(cfg.elab.c)}" ${isAdmin()?'':'disabled'}></div></div>
+    <div class="field"><label>Revisa y autoriza</label><select id="caut" onchange="icie.aut=+this.value">${cfg.firmas.map((x,i)=>`<option value="${i}"${i===icie.aut?' selected':''}>${esc(x.n)} · ${esc(x.c)}</option>`).join('')}</select></div>
+    ${isAdmin()?`<details style="margin:-4px 0 12px"><summary style="cursor:pointer;color:var(--brand);font-weight:600">Agregar otra persona que revisa y autoriza</summary><div class="row" style="margin-top:8px"><input id="cfn" placeholder="Nombre"><input id="cfc" placeholder="Cargo"></div><button class="btn ghost full" style="margin-top:8px" onclick="iFirmaAdd()">Agregar</button></details>`:''}
+    <h3 style="font-size:15px;margin:6px 0">Archivos para subir al sistema (hoja1, sin formato)</h3>
+    <div class="grid2"><button class="btn ghost" onclick="iXlsx('i')">Consumo indirectos (.xlsx)</button><button class="btn ghost" onclick="iXlsx('c')">Consumo combustible (.xlsx)</button></div>
+    <h3 style="font-size:15px;margin:14px 0 6px">Formato diario para firmar (PDF)</h3>
+    <div class="grid2"><button class="btn primary" onclick="iPdf('i')">Formato indirectos</button><button class="btn primary" onclick="iPdf('c')">Formato combustible</button></div>`);
+}
+function iFirmaAdd(){ const n = $('#cfn').value.trim(), c = $('#cfc').value.trim(); if(!n) return toast('Escribe el nombre');
+  const cfg = icfg(); D.master.ind = D.master.ind || emptyInd(); D.master.ind.cfg = {ts:Date.now(), elab:{n:$('#cen').value.trim().toUpperCase(), c:$('#cec').value.trim().toUpperCase()}, firmas:[...cfg.firmas, {n:n.toUpperCase(), c:c.toUpperCase()}]};
+  icie.aut = D.master.ind.cfg.firmas.length-1; save('master'); openCierre(); toast('Persona agregada'); }
+function iCfgSave(){ if(!isAdmin() || !$('#cen')) return; const cfg = icfg(), n = $('#cen').value.trim().toUpperCase(), c = $('#cec').value.trim().toUpperCase();
+  if(n && (n!==cfg.elab.n || c!==cfg.elab.c)){ D.master.ind = D.master.ind || emptyInd(); D.master.ind.cfg = {ts:Date.now(), elab:{n, c}, firmas:cfg.firmas}; save('master'); } }
+async function iXlsx(k){
+  try{ await loadXLSX(); }catch(e){ return toast(e.message); }
+  const f = icie.f, L = k==='i' ? lineasInd(f) : lineasFuel(f); if(!L.length) return toast('No hay '+(k==='i'?'egresos de material indirecto':'consumo de combustible')+' el '+fdate(f));
+  const aoa = [['PRODUCTO','NOMBRE','CANTIDAD','PISCINA','EQUIPO_CONTROL', k==='i'?'LOTE':'lote'], ...L.map(x=>[x.c, x.n, x.q, piscOut(x.p), x.e, x.l])];
+  const ws = XLSX.utils.aoa_to_sheet(aoa); L.forEach((x,i)=>{ const a = XLSX.utils.encode_cell({r:i+1,c:0}); ws[a] = {t:'s', v:x.c}; const p = XLSX.utils.encode_cell({r:i+1,c:3}); if(x.p) ws[p] = {t:'s', v:piscOut(x.p)}; });
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'hoja1');
+  XLSX.writeFile(wb, (k==='i'?'CONSUMO DIARIO INDIRECTOS ':'CONSUMO DIARIO DE COMBUSTIBLE ')+f+'.xlsx');
+  toast('Archivo descargado: '+L.length+' línea(s)'); }
+async function iPdf(k){
+  iCfgSave(); const f = icie.f, L = k==='i' ? lineasInd(f) : lineasFuel(f), cfg = icfg(), aut = cfg.firmas[icie.aut] || cfg.firmas[0];
+  if(!L.length) return toast('No hay '+(k==='i'?'egresos de material indirecto':'consumo de combustible')+' el '+fdate(f));
+  try{ await loadPDF(); }catch(e){ return toast(e.message); }
+  const doc = new window.jspdf.jsPDF({unit:'pt', format:'a4', orientation:'landscape'}), W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), m = 28;
+  const largo = new Date(f+'T12:00:00').toLocaleDateString('es-EC',{weekday:'long', month:'long', day:'2-digit', year:'numeric'});
+  doc.setFont('helvetica','bold'); doc.setFontSize(24); doc.setTextColor(255,0,0); doc.text('CONSUMO DE MATERIAL INDIRECTO', W/2, 46, {align:'center'});
+  let y = 46;
+  if(k==='c'){ y += 24; doc.setFontSize(14); doc.setTextColor(0,176,80); doc.text('DIESEL CAMARONERO - DIESEL PREMIUM - GASOLINA', W/2, y, {align:'center'}); }
+  y += 24; doc.setFontSize(14); doc.setTextColor(0,0,0); doc.text(pdfTxt(largo.replace(/^./,c=>c.toUpperCase())), W/2, y, {align:'center'});
+  const tw = W-2*m, ws = [9.5,34,9.5,8.5,11,31], sw = ws.reduce((a,b)=>a+b,0);
+  doc.autoTable({startY:y+16, margin:{left:m,right:m,bottom:90}, head:[['PRODUCTO','NOMBRE','CANTIDAD','PISCINA','EQUIPO_CONTROL', k==='i'?'LOTE':'lote']],
+    body:L.map(x=>[x.c, pdfTxt(x.n), fmt(x.q), piscOut(x.p), x.e, pdfTxt(x.l)]),
+    styles:{font:'helvetica', fontSize:8.5, cellPadding:3, lineColor:[0,0,0], lineWidth:0.5, textColor:[0,0,0], valign:'middle'},
+    headStyles:{fillColor:[0,112,192], textColor:255, fontStyle:'bold', halign:'center', fontSize:8.5, overflow:'visible'},
+    columnStyles:Object.fromEntries(ws.map((w,i)=>[i,{cellWidth:tw*w/sw, halign:i===2||i===3?'center':'left'}])) });
+  let fy = doc.lastAutoTable.finalY + 60; if(fy > H-40){ doc.addPage(); fy = 90; }
+  const firma = (x, n, c) => { doc.setDrawColor(0,0,0); doc.setLineWidth(0.7); doc.line(x-130, fy, x+130, fy); doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.text(pdfTxt(n), x, fy+15, {align:'center'}); doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.text(pdfTxt(c), x, fy+29, {align:'center'}); };
+  firma(m+tw*0.25, cfg.elab.n, cfg.elab.c); firma(m+tw*0.75, aut.n, aut.c);
+  doc.save((k==='i'?'Formato consumo indirectos ':'Formato consumo combustible ')+f+'.pdf'); toast('PDF descargado'); }
+
 /* ---------- registrar movimiento ---------- */
 let mv = {t:'e', c:'', id:null};
 function openMove(t, c, id){
@@ -860,6 +1250,10 @@ function vSet(){
       ${o.last?'<p style="font-size:13px;color:var(--muted);margin-top:8px">Última sincronización: '+esc(fdt(o.last))+'</p>':''}</div>
     ${adm?usersBlock(btn):''}
     ${adm?xlBlock(btn):''}
+    ${adm?`<div class="set-block"><h3>Material indirecto</h3>
+      <p style="font-size:14px">${icatOk()?`Catálogo cargado: <b>${ICAT.prods.length}</b> productos · <b>${(ICAT.eqs||[]).length}</b> equipos · aforo generadores ${ICAT.aforo&&ICAT.aforo.gen?'✓':'✗'} · aforo bombeo ${ICAT.aforo&&ICAT.aforo.bom?'✓':'✗'}${ICAT.ts?'<br><span style="color:var(--muted);font-size:13px">Actualizado '+esc(fdt(ICAT.ts))+'</span>':''}`:'Todavía no hay catálogo.'}</p>
+      <p style="font-size:14px">Sube tus Excel: <b>consumo diario de indirectos</b> (productos y equipos), <b>plantilla de combustible</b>, <b>control de generadores</b> y <b>control de motores de bombeo</b> (tablas de aforo y últimos horómetros). Puedes elegir los cuatro a la vez. Se guarda en la carpeta del OneDrive, no en la app.</p>
+      <div class="stack"><button class="btn primary" onclick="$('#icatf').click()">Subir archivos de indirectos</button></div></div>`:''}
     ${on?`<div class="set-block"><h3>Carga masiva de consumo</h3>
       <p style="font-size:14px">Sube desde la computadora las salidas (balanceado, medicamentos y demás) de todas las piscinas y precrías. Se lee solo la pestaña <b>CONSUMO</b> y solo las filas visibles del filtro.</p>
       <div class="stack"><button class="btn primary" onclick="openCarga()">Subir plantilla de consumo</button>
@@ -1757,7 +2151,7 @@ function mergeMaster(L,R){
   const reset=Math.max(L.conteoReset||0,R.conteoReset||0), cnt=mergeCount(L.conteo,R.conteo);
   Object.keys(cnt).forEach(k=>{ if(cnt[k].ts<reset) delete cnt[k]; });
   return {v:3, productos:[...pm.values()], entradas:byId(L.entradas,R.entradas,del), salidas:byId(L.salidas,R.salidas,del), conteo:cnt, del,
-    usuarios:[...um.values()], conteoReset:reset, admin:L.admin||R.admin, gen:L.gen||R.gen||'', traspasos:byId(L.traspasos,R.traspasos,del)};
+    usuarios:[...um.values()], conteoReset:reset, admin:L.admin||R.admin, gen:L.gen||R.gen||'', traspasos:byId(L.traspasos,R.traspasos,del), ind:mergeInd(L.ind,R.ind,del)};
 }
 async function readJSON(path){ const r = await graph(path, {raw:true}); return r ? r.json() : null; }
 function rebaseOn(R){
@@ -1765,7 +2159,8 @@ function rebaseOn(R){
   const since = D.syncedAt || od().last || 0, L = D.master, nw = x => (x.ets||x.ts||0) > since;
   const pend = {productos:L.productos.filter(p=>(p.ts||0)>since), entradas:L.entradas.filter(nw), salidas:L.salidas.filter(nw),
     conteo:Object.fromEntries(Object.entries(L.conteo).filter(([k,x])=>x.ts>since)), del:Object.fromEntries(Object.entries(L.del).filter(([k,v])=>v>since)),
-    usuarios:L.usuarios.filter(u=>u.ts>since), conteoReset:0, admin:L.admin, gen:R.gen, traspasos:(L.traspasos||[]).filter(nw)};
+    usuarios:L.usuarios.filter(u=>u.ts>since), conteoReset:0, admin:L.admin, gen:R.gen, traspasos:(L.traspasos||[]).filter(nw),
+    ind:(()=>{ const i = L.ind||emptyInd(); return {ent:i.ent.filter(nw), sal:i.sal.filter(nw), lec:i.lec.filter(nw), cfg:(i.cfg&&i.cfg.ts>since)?i.cfg:{}}; })()};
   return mergeMaster(pend, R);
 }
 async function syncMaster(admin){
@@ -1826,7 +2221,7 @@ async function autoSync(manual){
     derive(); persist(); odSet({last:Date.now()});
     if(admin) await excelSync(manual);
     if(admin){ try{ await fotoAdmin(); }catch(e){} }
-    fotoFlush();
+    fotoFlush(); icatSync().then(()=>{ if(ui.mod==='i' && view==='home') render(); });
     const typing = document.activeElement && ['INPUT','SELECT'].includes(document.activeElement.tagName);
     if(!$('#sheet').classList.contains('show') && !typing) render();
     if(manual) toast('Sincronizado');
